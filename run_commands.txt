@@ -1,0 +1,3 @@
+
+python train_net.py --num-gpus 1 --config configs/faster_rcnn_R101_cross_clipart_v2.yaml OUTPUT_DIR output/exp_clipart
+python train_net.py --eval-only --num-gpus 1 --config configs/faster_rcnn_R101_cross_clipart.yaml  MODEL.WEIGHTS <your weight>.pth

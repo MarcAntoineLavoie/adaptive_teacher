@@ -69,6 +69,18 @@ def main(args):
 if __name__ == "__main__":
     args = default_argument_parser().parse_args()
 
+    #   --num-gpus 8\
+    #   --config configs/faster_rcnn_VGG_cross_city.yaml\
+    #   OUTPUT_DIR output/exp_city
+
+    args.num_gpus = 1
+    args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
+
+    # args.OUTPUT_DIR = './output/exp_city_v1'
+    # args.resume = True
+    args.OUTPUT_DIR = './output/temp1'
+    args.resume = False
+
     print("Command Line Args:", args)
     launch(
         main,
