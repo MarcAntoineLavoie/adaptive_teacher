@@ -76,10 +76,12 @@ if __name__ == "__main__":
     args.num_gpus = 1
     args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
 
-    # args.OUTPUT_DIR = './output/exp_city_v1'
+    args.OUTPUT_DIR = './output/exp_city_v1'
+    args.resume = True
+    # args.OUTPUT_DIR = './output/temp1'
     # args.resume = True
-    args.OUTPUT_DIR = './output/temp1'
-    args.resume = False
+
+    args.eval_only = True
 
     print("Command Line Args:", args)
     launch(
