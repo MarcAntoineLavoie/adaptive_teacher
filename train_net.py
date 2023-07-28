@@ -55,7 +55,8 @@ def main(args):
         else:
             model = Trainer.build_model(cfg)
             DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
-                cfg.MODEL.WEIGHTS, resume=args.resume
+            # DetectionCheckpointer(model, save_dir=args.output_dir).resume_or_load(   
+	     cfg.MODEL.WEIGHTS, resume=args.resume
             )
             res = Trainer.test(cfg, model)
         return res
@@ -76,12 +77,12 @@ if __name__ == "__main__":
     args.num_gpus = 1
     args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
 
-    args.OUTPUT_DIR = './output/exp_city_v1'
+    args.output_dir = './output/exp_city_v2'
     args.resume = True
     # args.OUTPUT_DIR = './output/temp1'
     # args.resume = True
 
-    args.eval_only = True
+    # args.eval_only = True
 
     print("Command Line Args:", args)
     launch(
