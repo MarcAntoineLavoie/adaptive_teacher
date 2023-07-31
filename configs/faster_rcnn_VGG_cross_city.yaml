@@ -1,5 +1,5 @@
 _BASE_: "./Base-RCNN-C4.yaml"
-OUTPUT_DIR: "output/test1"
+OUTPUT_DIR: "output/test2"
 MODEL:
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
   META_ARCHITECTURE: "DAobjTwoStagePseudoLabGeneralizedRCNN"
