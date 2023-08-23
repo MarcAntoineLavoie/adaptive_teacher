@@ -18,17 +18,47 @@ import adapteacher.data.datasets.builtin
 
 from adapteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
 
+from math import floor 
 
 def setup(args):
     """
     Create configs and perform basic setups.
     """
     cfg = get_cfg()
+    cfg.set_new_allowed(True)
     add_ateacher_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
+    # cfg = scale_configs(cfg)
     cfg.freeze()
     default_setup(cfg, args)
+    return cfg
+
+def scale_configs(cfg):
+    base_batch = 16
+    curr_batch = cfg['SOLVER']['IMG_PER_BATCH_LABEL']
+    curr_batch = 6
+    ratio = curr_batch / base_batch
+    base_iteration = cfg['SOLVER']['MAX_ITER']
+    curr_iter = int(round(base_iteration / ratio, -4))
+    base_lr = cfg['SOLVER']['BASE_LR']
+    curr_lr = base_lr * ratio
+    base_steps = cfg['SOLVER']['STEPS']
+    curr_steps = tuple([int(round(x/ratio, -4)) for x in base_steps])
+    base_burn = cfg['SEMISUPNET']['BURN_UP_STEP']
+    curr_burn = int(round(base_burn / ratio,-4))
+    base_eval = cfg['TEST']['EVAL_PERIOD']
+    curr_eval = base_eval * round(1/ratio)
+    base_ckpt = cfg['SOLVER']['CHECKPOINT_PERIOD']
+    curr_ckpt = base_ckpt * floor(1/ratio)
+
+    cfg['SOLVER']['MAX_ITER'] = curr_iter
+    cfg['SOLVER']['BASE_LR'] = curr_lr
+    cfg['SOLVER']['STEPS'] = curr_steps
+    cfg['SEMISUPNET']['BURN_UP_STEP'] = curr_burn
+    cfg['TEST']['EVAL_PERIOD'] = curr_eval
+    cfg['SOLVER']['CHECKPOINT_PERIOD'] = curr_ckpt
+
     return cfg
 
 
@@ -75,7 +105,7 @@ if __name__ == "__main__":
     #   OUTPUT_DIR output/exp_city
 
     args.num_gpus = 1
-    args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
+    args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
 
     args.output_dir = './output/exp_city_v2'
     args.resume = True

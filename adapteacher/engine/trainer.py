@@ -315,6 +315,12 @@ class ATeacherTrainer(DefaultTrainer):
             optimizer=optimizer,
             scheduler=self.scheduler,
         )
+            # self.checkpointer_best = hooks.BestCheckpointer(
+            #     ensem_ts_model,   
+            #     cfg.OUTPUT_DIR,
+            #     optimizer=optimizer,
+            #     scheduler=self.scheduler,
+            # )
         self.start_iter = 0
         self.max_iter = cfg.SOLVER.MAX_ITER
         self.cfg = cfg

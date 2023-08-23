@@ -1,8 +1,8 @@
 _BASE_: "./Base-RCNN-C4.yaml"
-OUTPUT_DIR: "output/test2"
+OUTPUT_DIR: "output/test3"
 MODEL:
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
-  META_ARCHITECTURE: "DAobjTwoStagePseudoLabGeneralizedRCNN"
+  META_ARCHITECTURE: "ProbDATwoStagePseudoLabGeneralizedRCNN"
   BACKBONE:
     NAME: "build_vgg_backbone"
   MASK_ON: False
@@ -19,7 +19,8 @@ MODEL:
     # PRE_NMS_TOPK_TRAIN: 6000
     # POST_NMS_TOPK_TRAIN: 1000
   ROI_HEADS:
-    NAME: "StandardROIHeadsPseudoLab"
+    # NAME: "StandardROIHeadsPseudoLab"
+    NAME: "ProbROIHeadsPseudoLab"
     LOSS: "CrossEntropy" # variant: "CrossEntropy"
     NUM_CLASSES: 8
     IN_FEATURES: ["vgg4"]
@@ -29,6 +30,12 @@ MODEL:
     NAME: "FastRCNNConvFCHead"
     NUM_FC: 2
     POOLER_RESOLUTION: 7
+  PROBABILISTIC_MODELING:
+  # One of the following Loss types: 'none' or 'negative_log_likelihood', 'second_moment_matching', 'energy_loss'.
+    BBOX_COV_LOSS:
+        NAME: 'energy_loss'
+        COVARIANCE_TYPE: 'diagonal' # One of the following: 'full', 'diagonal'
+        NUM_SAMPLES: 1000
 SOLVER:
   LR_SCHEDULER_NAME: "WarmupTwoStageMultiStepLR"
   STEPS: (60000, 80000, 90000, 360000)
@@ -36,8 +43,8 @@ SOLVER:
   MAX_ITER: 100000
   # IMG_PER_BATCH_LABEL: 16
   # IMG_PER_BATCH_UNLABEL: 16
-  IMG_PER_BATCH_LABEL: 3
-  IMG_PER_BATCH_UNLABEL: 3
+  IMG_PER_BATCH_LABEL: 2
+  IMG_PER_BATCH_UNLABEL: 2
   BASE_LR: 0.04
 DATALOADER:
   SUP_PERCENT: 100.0
