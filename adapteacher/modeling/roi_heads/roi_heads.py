@@ -284,6 +284,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         compute_loss=True,
         branch="",
         compute_val_loss=False,
+        unsup=False,
     ) -> Tuple[List[Instances], Dict[str, torch.Tensor]]:
 
         del images
@@ -306,7 +307,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
         if (self.training and compute_loss) or compute_val_loss:
             losses, _ = self._forward_box(
-                features, proposals, compute_loss, compute_val_loss, branch
+                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup
             )
             return proposals, losses
         else:
@@ -323,6 +324,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         compute_loss: bool = True,
         compute_val_loss: bool = False,
         branch: str = "",
+        unsup: bool = False,
     ) -> Union[Dict[str, torch.Tensor], List[Instances]]:
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
@@ -333,7 +335,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         if (
             self.training and compute_loss
         ) or compute_val_loss:  # apply if training loss or val loss
-            losses = self.box_predictor.losses(predictions, proposals)
+            losses = self.box_predictor.losses(predictions, proposals, unsup=unsup)
 
             if self.train_on_pred_boxes:
                 with torch.no_grad():
@@ -577,7 +579,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
         return scores, proposal_deltas, score_vars, proposal_covs
 
-    def losses(self, predictions, proposals, current_step=0):
+    def losses(self, predictions, proposals, current_step=0, unsup=False):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -673,7 +675,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                                                                 None], gt_class_cols]
             gt_proposals_delta = gt_proposal_deltas[fg_inds]
 
-            if self.compute_bbox_cov and len(fg_inds):
+            if self.compute_bbox_cov and len(fg_inds) and not unsup:
                 pred_proposal_covs = pred_proposal_covs[fg_inds[:,
                                                                 None], gt_covar_class_cols]
                 pred_proposal_covs = clamp_log_variance(pred_proposal_covs)

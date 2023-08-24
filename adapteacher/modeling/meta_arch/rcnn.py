@@ -645,6 +645,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 compute_loss=True,
                 targets=gt_instances,
                 branch=branch,
+                unsup=False,
             )
 
             # visualization
@@ -679,6 +680,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 compute_loss=True,
                 targets=gt_instances,
                 branch=branch,
+                unsup=True,
             )
 
             # visualization
@@ -712,6 +714,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 targets=None,
                 compute_loss=False,
                 branch=branch,
+                unsup=True,
             )
 
             # if self.vis_period > 0:
