@@ -105,7 +105,8 @@ if __name__ == "__main__":
     #   OUTPUT_DIR output/exp_city
 
     args.num_gpus = 1
-    args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
+    # args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
+    args.config_file = './configs/faster_rcnn_VGG_cross_city_casc.yaml'
 
     args.output_dir = './output/exp_city_v2'
     args.resume = True
