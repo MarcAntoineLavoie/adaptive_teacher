@@ -377,7 +377,8 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "bbox_cov_type": bbox_cov_type,
             # "dropout_rate": cfg.MODEL.PROBABILISTIC_MODELING.DROPOUT_RATE
             "dropout_rate": None,
-            "annealing_step": cfg.SOLVER.STEPS[1],
+            # "annealing_step": cfg.SOLVER.STEPS[1],
+            "annealing_step": cfg.MODEL.PROBABILISTIC_MODELING.ANNEALING_STEP,
             "bbox_cov_num_samples": bbox_cov_num_samples
             # fmt: on
         }
