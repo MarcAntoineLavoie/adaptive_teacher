@@ -126,5 +126,6 @@ class RandomErasing_detect(transforms.RandomErasing):
                 )
 
             x, y, h, w, v = self.get_params(img, scale=self.scale, ratio=self.ratio, value=value)
-            return F.erase(img, x, y, h, w, v, self.inplace), [x,y,h,w]
+            # return F.erase(img, x, y, h, w, v, self.inplace), [x,y,h,w]
+            return F.erase(img, x, y, h, w, v, self.inplace), [y,x,w,h]
         return img, []

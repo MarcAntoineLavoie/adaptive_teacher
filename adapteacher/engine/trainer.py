@@ -878,6 +878,27 @@ class ATeacherTrainer(DefaultTrainer):
 
                 areas = (bbox_gt[:,2:] - bbox_gt[:,:2]).prod(dim=1)
                 valid_boxes = (intersection / areas) < self.cfg.INPUT.MAX_OCCLUSION
+
+                deltas = dcs1*check1
+                new_bboxes = bbox_gt.clone()
+                for lv1 in range(m):
+                    for lv2 in range(n):
+                        if deltas[lv1,lv2,:].any():
+                            if (bbox_regions[lv2,1] <= new_bboxes[lv1,1] and bbox_regions[lv2,3] >= new_bboxes[lv1,3]):
+                                if (bbox_regions[lv2,0] <= new_bboxes[lv1,0]) and (bbox_regions[lv2,2] <= new_bboxes[lv1,2]):
+                                    new_bboxes[lv1,0] = bbox_regions[lv2,2]
+                                elif (bbox_regions[lv2,0] >= new_bboxes[lv1,0]) and (bbox_regions[lv2,2] >= new_bboxes[lv1,2]):
+                                    new_bboxes[lv1,2] = bbox_regions[lv2,0]
+                            
+                            if (bbox_regions[lv2,0] <= new_bboxes[lv1,0] and bbox_regions[lv2,2] >= new_bboxes[lv1,2]):
+                                if (bbox_regions[lv2,1] <= new_bboxes[lv1,1]) and (bbox_regions[lv2,3] <= new_bboxes[lv1,3]):
+                                    new_bboxes[lv1,1] = bbox_regions[lv2,3]
+                                elif (bbox_regions[lv2,1] >= new_bboxes[lv1,1]) and (bbox_regions[lv2,3] >= new_bboxes[lv1,3]):
+                                    new_bboxes[lv1,3] = bbox_regions[lv2,1]
+                
+                data_strong[idx]['instances'].gt_boxes = Boxes(new_bboxes)
+                # if sum(valid_boxes) < len(valid_boxes):
+                #     a = 1
                 data_strong[idx]['instances'] = data_strong[idx]['instances'][valid_boxes]
             
         return data_strong    
