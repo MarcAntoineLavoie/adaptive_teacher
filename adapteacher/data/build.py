@@ -22,8 +22,9 @@ from detectron2.data.build import (
     build_batch_data_loader,
 )
 from adapteacher.data.common import (
-    AspectRatioGroupedSemiSupDatasetTwoCrop,
+    AspectRatioGroupedSemiSupDatasetTwoCrop, AspectRatioGroupedSemiSupDatasetTwoCrop_detect
 )
+from adapteacher.data.dataset_mapper import DatasetMapperTwoCropSeparate, DatasetMapperWithWeakAugs
 
 
 """
@@ -215,6 +216,7 @@ def build_detection_semisup_train_loader_two_crops(cfg, mapper=None):
         cfg.SOLVER.IMG_PER_BATCH_UNLABEL,
         aspect_ratio_grouping=cfg.DATALOADER.ASPECT_RATIO_GROUPING,
         num_workers=cfg.DATALOADER.NUM_WORKERS,
+        clean_detect=cfg.INPUT.CLEAN_DETECTIONS,
     )
 
 
@@ -226,7 +228,8 @@ def build_semisup_batch_data_loader_two_crop(
     total_batch_size_unlabel,
     *,
     aspect_ratio_grouping=False,
-    num_workers=0
+    num_workers=0,
+    clean_detect=False
 ):
     world_size = get_world_size()
     assert (
@@ -268,9 +271,43 @@ def build_semisup_batch_data_loader_two_crop(
             ),  # don't batch, but yield individual elements
             worker_init_fn=worker_init_reset_seed,
         )  # yield individual mapped dict
-        return AspectRatioGroupedSemiSupDatasetTwoCrop(
-            (label_data_loader, unlabel_data_loader),
-            (batch_size_label, batch_size_unlabel),
-        )
+        if clean_detect:
+            return AspectRatioGroupedSemiSupDatasetTwoCrop_detect(
+                (label_data_loader, unlabel_data_loader),
+                (batch_size_label, batch_size_unlabel),
+            )
+        else:
+            return AspectRatioGroupedSemiSupDatasetTwoCrop(
+                (label_data_loader, unlabel_data_loader),
+                (batch_size_label, batch_size_unlabel),
+            )
     else:
         raise NotImplementedError("ASPECT_RATIO_GROUPING = False is not supported yet")
+    
+
+def build_detection_unlabel_train_loader(cfg, mapper=None, data_name=None):
+    dataset_name = data_name if data_name is not None else cfg.DATASETS.TRAIN_UNLABEL
+    unlabel_dicts = get_detection_dataset_dicts(
+        dataset_name,
+        filter_empty=False,
+        min_keypoints=cfg.MODEL.ROI_KEYPOINT_HEAD.MIN_KEYPOINTS_PER_IMAGE
+        if cfg.MODEL.KEYPOINT_ON
+        else 0,
+        proposal_files=cfg.DATASETS.PROPOSAL_FILES_TRAIN
+        if cfg.MODEL.LOAD_PROPOSALS
+        else None,
+    )
+
+    unlabel_dataset = DatasetFromList(unlabel_dicts, copy=False)
+    dataset = MapDataset(unlabel_dataset, mapper)
+
+    sampler = InferenceSampler(len(dataset))
+    batch_sampler = torch.utils.data.sampler.BatchSampler(sampler, 1, drop_last=False)
+
+    data_loader = torch.utils.data.DataLoader(
+        dataset,
+        num_workers=cfg.DATALOADER.NUM_WORKERS,
+        batch_sampler=batch_sampler,
+        collate_fn=trivial_batch_collator,
+    )
+    return data_loader

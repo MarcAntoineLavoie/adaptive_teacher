@@ -18,7 +18,7 @@ from detectron2.modeling.roi_heads import build_roi_heads
 from detectron2.utils.events import get_event_storage
 from detectron2.structures import ImageList
 
-from adapteacher.modeling.roi_heads.roi_heads import ProbabilisticFastRCNNOutputLayers
+# from adapteacher.modeling.prob_rcnn import ProbabilisticFastRCNNOutputLayers
 
 ############### Image discriminator ##############
 class FCDiscriminator_img(nn.Module):

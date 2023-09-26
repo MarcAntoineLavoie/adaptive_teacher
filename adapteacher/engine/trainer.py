@@ -27,8 +27,9 @@ from adapteacher.data.build import (
     build_detection_semisup_train_loader,
     build_detection_test_loader,
     build_detection_semisup_train_loader_two_crops,
+    build_detection_unlabel_train_loader,
 )
-from adapteacher.data.dataset_mapper import DatasetMapperTwoCropSeparate
+from adapteacher.data.dataset_mapper import DatasetMapperTwoCropSeparate, DatasetMapperWithWeakAugs, DatasetMapperWithStrongAugs, DatasetMapperTwoCropSeparate_detect
 from adapteacher.engine.hooks import LossEvalHook
 from adapteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
 from adapteacher.checkpoint.detection_checkpoint import DetectionTSCheckpointer
@@ -38,6 +39,29 @@ from adapteacher.evaluation import PascalVOCDetectionEvaluator, COCOEvaluator
 from .probe import OpenMatchTrainerProbe
 import copy
 
+
+from detectron2.evaluation import (
+    DatasetEvaluator,
+    inference_on_dataset,
+    print_csv_format,
+    verify_results,
+)
+
+
+
+from detectron2.utils.comm import get_world_size
+from collections import abc
+from contextlib import ExitStack, contextmanager
+from torch import nn
+import datetime
+from detectron2.utils.logger import log_every_n_seconds
+import json
+from detectron2.data import DatasetCatalog
+from detectron2.data.datasets.builtin_meta import _get_builtin_metadata
+from detectron2.structures.boxes import BoxMode
+from detectron2.structures.boxes import pairwise_iou, pairwise_intersection
+from math import comb
+from adapteacher.modeling.prob_rcnn import ProbROIHeadsPseudoLab
 
 # Supervised-only Trainer
 class BaselineTrainer(DefaultTrainer):
@@ -326,7 +350,8 @@ class ATeacherTrainer(DefaultTrainer):
         self.cfg = cfg
 
         self.probe = OpenMatchTrainerProbe(cfg)
-        self.register_hooks(self.build_hooks()) 
+        self.register_hooks(self.build_hooks_final()) 
+        self.register_hooks(self.build_hooks())
 
     def resume_or_load(self, resume=True):
         """
@@ -355,15 +380,16 @@ class ATeacherTrainer(DefaultTrainer):
             self.start_iter = comm.all_gather(self.start_iter)[0]
 
     @classmethod
-    def build_evaluator(cls, cfg, dataset_name, output_folder=None):
+    def build_evaluator(cls, cfg, dataset_name, output_folder=None, allow_cached=True):
         if output_folder is None:
             output_folder = os.path.join(cfg.OUTPUT_DIR, "inference")
         evaluator_list = []
         evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
 
         if evaluator_type == "coco":
+            use_prob = True if cfg.MODEL.META_ARCHITECTURE == 'ProbDATwoStagePseudoLabGeneralizedRCNN' else False
             evaluator_list.append(COCOEvaluator(
-                dataset_name, output_dir=output_folder))
+                dataset_name, output_dir=output_folder, allow_cached=allow_cached, use_prob=use_prob))
         elif evaluator_type == "pascal_voc":
             return PascalVOCDetectionEvaluator(dataset_name)
         elif evaluator_type == "pascal_voc_water":
@@ -381,7 +407,8 @@ class ATeacherTrainer(DefaultTrainer):
 
     @classmethod
     def build_train_loader(cls, cfg):
-        mapper = DatasetMapperTwoCropSeparate(cfg, True)
+        # mapper = DatasetMapperTwoCropSeparate(cfg, True)
+        mapper = DatasetMapperTwoCropSeparate_detect(cfg, True)
         return build_detection_semisup_train_loader_two_crops(cfg, mapper)
 
     @classmethod
@@ -507,7 +534,13 @@ class ATeacherTrainer(DefaultTrainer):
         data = next(self._trainer._data_loader_iter)
         # data_q and data_k from different augmentations (q:strong, k:weak)
         # label_strong, label_weak, unlabed_strong, unlabled_weak
-        label_data_q, label_data_k, unlabel_data_q, unlabel_data_k = data
+        if self.cfg.INPUT.CLEAN_DETECTIONS:
+            label_data_q, label_data_k, label_regions, unlabel_data_q, unlabel_data_k, unlabel_regions = data
+            label_data_q = self.clean_detections(label_data_q, label_regions)
+            unlabel_data_q = self.clean_detections(unlabel_data_q, unlabel_regions)
+        else:
+            label_data_q, label_data_k, unlabel_data_q, unlabel_data_k = data
+
         data_time = time.perf_counter() - start
 
         # burn-in stage (supervised training with labeled data)
@@ -792,3 +825,524 @@ class ATeacherTrainer(DefaultTrainer):
             # run writers in the end, so that evaluation metrics are written
             ret.append(hooks.PeriodicWriter(self.build_writers(), period=20))
         return ret
+
+    def clean_detections(self, data_strong, regions):
+        for idx in range(len(data_strong)):
+            bbox_regions = torch.tensor([x for x in regions[idx] if x])
+            if not bbox_regions.shape[0]:
+                continue
+            bbox_regions[:,2:] = bbox_regions[:,2:] + bbox_regions[:,:2]
+            bbox_gt = data_strong[idx]['instances'].gt_boxes.tensor
+
+            m = bbox_gt.shape[0]
+            n = bbox_regions.shape[0]
+            if n > 0:
+                cs1 = torch.zeros((m,n,4))
+                cs1[:,:,2:] = torch.min(bbox_gt[:, None, 2:], bbox_regions[:, 2:])
+                cs1[:,:,:2] = torch.max(bbox_gt[:, None, :2], bbox_regions[:, :2])
+                dcs1 = cs1[:,:,2:] - cs1[:,:,:2]
+                check1 = (dcs1 > 0).all(dim=2, keepdim=True)
+                cs1 = cs1*check1
+                intersection = (dcs1*check1).prod(dim=2).sum(dim=1)
+
+                if n > 1:
+                    n2 = comb(n,2)
+                    cs2 = torch.zeros((m,n2,4))
+                    lv1 = 0
+                    for lv2 in range(n-1):
+                        for lv3 in range(lv2+1,n):    
+                            cs2[:,lv1,2:] = torch.min(cs1[:, lv2, 2:], cs1[:, lv3, 2:])
+                            cs2[:,lv1,:2] = torch.max(cs1[:, lv2, :2], cs1[:, lv3, :2])
+                            lv1 += 1
+                    dcs2 = cs2[:,:,2:] - cs2[:,:,:2]
+                    check2 = (dcs2 > 0).all(dim=2, keepdim=True)
+                    cs2 = cs2*check2
+                    intersection = intersection - (dcs2*check2).prod(dim=2).sum(dim=1)
+
+                    if n > 2:
+                        n3 = comb(n,3)
+                        cs3 = torch.zeros((m,1,4))
+                        # lv1 = 0
+                        # for lv2 in range(n2-2):
+                        #     for lv2 in range(lv2,n3-1):
+                        #         for lv3 in range(lv3,n3):    
+                                # cs2[:,k,2:] = torch.min(cs1[:, i, 2:], cs1[:, j, 2:])
+                                # cs2[:,k,:2] = torch.max(cs1[:, i, :2], cs1[:, j, :2])
+                                # k += 1
+                        cs3[:,0,2:] = torch.min(cs2[:, 0, 2:], cs1[:, 2, 2:]) 
+                        cs3[:,0,:2] = torch.min(cs2[:, 0, :2], cs1[:, 2, :2])
+                        dcs3 = cs3[:,:,2:] - cs3[:,:,:2]
+                        check3 = (dcs3 > 0).all(dim=2, keepdim=True)
+                        cs3 = cs3*check3
+                        intersection = intersection + (dcs3*check3).prod(dim=2).sum(dim=1)
+
+                areas = (bbox_gt[:,2:] - bbox_gt[:,:2]).prod(dim=1)
+                valid_boxes = (intersection / areas) < self.cfg.INPUT.MAX_OCCLUSION
+                data_strong[idx]['instances'] = data_strong[idx]['instances'][valid_boxes]
+            
+        return data_strong    
+
+    def build_hooks_final(self):
+        cfg = self.cfg.clone()
+        cfg.defrost()
+        cfg.DATALOADER.NUM_WORKERS = 0  # save some memory and time for PreciseBN
+
+        ret = [
+            hooks.IterationTimer(),
+            hooks.LRScheduler(self.optimizer, self.scheduler),
+            hooks.PreciseBN(
+                # Run at the same freq as (but before) evaluation.
+                cfg.TEST.EVAL_PERIOD,
+                self.model,
+                # Build a new data loader to not affect training
+                self.build_train_loader(cfg),
+                cfg.TEST.PRECISE_BN.NUM_ITER,
+            )
+            if cfg.TEST.PRECISE_BN.ENABLED and get_bn_modules(self.model)
+            else None,
+        ]
+
+        def eval_relative():
+            return self.test_relative()
+
+        ret.append(hooks.EvalHook(0,
+                   eval_relative))
+
+        if comm.is_main_process():
+            # run writers in the end, so that evaluation metrics are written
+            ret.append(hooks.PeriodicWriter(self.build_writers(), period=20))
+        return ret
+    
+    def test_relative(self):
+
+        # """
+        # Evaluate the given model. The given model is expected to already contain
+        # weights to evaluate.
+
+        # Args:
+        #     cfg (CfgNode):
+        #     model (nn.Module):
+        #     evaluators (list[DatasetEvaluator] or None): if None, will call
+        #         :meth:`build_evaluator`. Otherwise, must have the same length as
+        #         ``cfg.DATASETS.TEST``.
+
+        # Returns:
+        #     dict: a dict of result metrics
+        # """
+        logger = logging.getLogger(__name__)
+
+        results = OrderedDict()
+        datasets_val = ['cityscapes_val', 'cityscapes_foggy_val']
+
+        cfg = self.cfg.clone()
+        cfg.defrost()
+        cfg.INPUT.MIN_SIZE_TRAIN = (1024,)
+        cfg.INPUT.MIN_SIZE_TEST = (1024,)
+        cfg.INPUT.MAX_SIZE_TRAIN = (2048,)
+        cfg.INPUT.MAX_SIZE_TEST = (2048,)
+        cfg.INPUT.RANDOM_FLIP = "none"
+
+
+        # Test weak aug and generate pseudo labels
+        mapper = DatasetMapperWithWeakAugs(cfg, True)
+        data_loader = build_detection_unlabel_train_loader(cfg, mapper=mapper)
+        evaluator = self.build_evaluator(cfg, 'cityscapes_foggy_train')
+
+        results_i = self.inference_and_pseudo_label(self.model_teacher, data_loader, evaluator)
+        results['cityscapes_foggy_train_weak'] = results_i
+        if comm.is_main_process():
+            assert isinstance(
+                results_i, dict
+            ), "Evaluator must return a dict on the main process. Got {} instead.".format(
+                results_i
+            )
+            logger.info("Evaluation results for {} in csv format:".format('cityscapes_foggy_train'))
+            print_csv_format(results_i)
+
+
+        # Test strong augss on GT and pseudo labels
+        mapper = DatasetMapperWithStrongAugs(cfg, True)
+        data_loader = build_detection_unlabel_train_loader(cfg, mapper=mapper)
+        evaluator = self.build_evaluator(self.cfg, 'cityscapes_foggy_train')
+        evaluator_pseudo = self.build_evaluator(cfg, 'cityscapes_foggy_pseudo_labels', allow_cached=False)
+
+        results_i, results_pseudo = self.inference_on_dataset_pseudo(self.model, data_loader, evaluator, evaluator_pseudo=evaluator_pseudo)
+        results['cityscapes_foggy_train_strong'] = results_i
+        if comm.is_main_process():
+            assert isinstance(
+                results_i, dict
+            ), "Evaluator must return a dict on the main process. Got {} instead.".format(
+                results_i
+            )
+            logger.info("Evaluation results for {} in csv format:".format('cityscapes_foggy_train'))
+            print_csv_format(results_i)
+
+        results['cityscapes_foggy_pseudo_strong'] = results_pseudo
+        if comm.is_main_process():
+            assert isinstance(
+                results_pseudo, dict
+            ), "Evaluator must return a dict on the main process. Got {} instead.".format(
+                results_pseudo
+            )
+            logger.info("Evaluation results for {} in csv format:".format('cityscapes_foggy_train'))
+            print_csv_format(results_pseudo)
+
+
+
+        for idx, dataset_name in enumerate(datasets_val):
+            data_loader = self.build_test_loader(cfg, dataset_name)
+
+            try:
+                evaluator = self.build_evaluator(cfg, dataset_name)
+            except NotImplementedError:
+                logger.warn(
+                    "No evaluator found. Use `DefaultTrainer.test(evaluators=)`, "
+                    "or implement its `build_evaluator` method."
+                )
+                results[dataset_name] = {}
+                continue
+
+            results_i = inference_on_dataset(self.model_teacher, data_loader, evaluator)
+            results[dataset_name] = results_i
+            if comm.is_main_process():
+                assert isinstance(
+                    results_i, dict
+                ), "Evaluator must return a dict on the main process. Got {} instead.".format(
+                    results_i
+                )
+                logger.info("Evaluation results for {} in csv format:".format(dataset_name))
+                print_csv_format(results_i)
+
+        if len(results) == 1:
+            results = list(results.values())[0]
+        return results
+
+
+    def inference_and_pseudo_label(self,
+        model, data_loader, evaluator
+    ):
+        """
+        Run model on the data_loader and evaluate the metrics with evaluator.
+        Also benchmark the inference speed of `model.__call__` accurately.
+        The model will be used in eval mode.
+
+        Args:
+            model (callable): a callable which takes an object from
+                `data_loader` and returns some outputs.
+
+                If it's an nn.Module, it will be temporarily set to `eval` mode.
+                If you wish to evaluate a model in `training` mode instead, you can
+                wrap the given model and override its behavior of `.eval()` and `.train()`.
+            data_loader: an iterable object with a length.
+                The elements it generates will be the inputs to the model.
+            evaluator: the evaluator(s) to run. Use `None` if you only want to benchmark,
+                but don't want to do any evaluation.
+
+        Returns:
+            The return value of `evaluator.evaluate()`
+        """
+        num_devices = get_world_size()
+        logger = logging.getLogger(__name__)
+        logger.info("Start inference on {} batches".format(len(data_loader)))
+
+        total = len(data_loader)  # inference data loader must have a fixed length
+        if evaluator is None:
+            # create a no-op evaluator
+            evaluator = DatasetEvaluators([])
+        if isinstance(evaluator, abc.MutableSequence):
+            evaluator = DatasetEvaluators(evaluator)
+        evaluator.reset()
+
+        num_warmup = min(5, total - 1)
+        start_time = time.perf_counter()
+        total_data_time = 0
+        total_compute_time = 0
+        total_eval_time = 0
+        pseudo_dicts = []
+        with ExitStack() as stack:
+            if isinstance(model, nn.Module):
+                stack.enter_context(inference_context(model))
+            stack.enter_context(torch.no_grad())
+
+            start_data_time = time.perf_counter()
+            for idx, inputs in enumerate(data_loader):
+                total_data_time += time.perf_counter() - start_data_time
+                if idx == num_warmup:
+                    start_time = time.perf_counter()
+                    total_data_time = 0
+                    total_compute_time = 0
+                    total_eval_time = 0
+
+                start_compute_time = time.perf_counter()
+                outputs = model(inputs)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                total_compute_time += time.perf_counter() - start_compute_time
+
+                curr_thresh = self.cfg.SEMISUPNET.BBOX_THRESHOLD
+                pred_insts = outputs[0]['instances'][outputs[0]['instances'].scores > curr_thresh]
+                annotations = []
+                for idx in range(pred_insts.pred_boxes.tensor.shape[0]):
+                    annotation = {'iscrowd': False,
+                                  'category_id': pred_insts.pred_classes[idx].item(),
+                                  'bbox': tuple(pred_insts.pred_boxes.tensor[idx,:].tolist()),
+                                  'bbox_mode': BoxMode.XYXY_ABS,}
+                    annotations.append(annotation)
+
+                pred_dict = {'annotations': annotations}
+                for key in inputs[0].keys():
+                    # if key != 'image':
+                    if key not in ['instances', 'image']:
+                        pred_dict[key] = inputs[0][key]
+
+                pseudo_dicts.append(pred_dict)
+
+                start_eval_time = time.perf_counter()
+                evaluator.process(inputs, outputs)
+                total_eval_time += time.perf_counter() - start_eval_time
+
+                iters_after_start = idx + 1 - num_warmup * int(idx >= num_warmup)
+                data_seconds_per_iter = total_data_time / iters_after_start
+                compute_seconds_per_iter = total_compute_time / iters_after_start
+                eval_seconds_per_iter = total_eval_time / iters_after_start
+                total_seconds_per_iter = (time.perf_counter() - start_time) / iters_after_start
+                if idx >= num_warmup * 2 or compute_seconds_per_iter > 5:
+                    eta = datetime.timedelta(seconds=int(total_seconds_per_iter * (total - idx - 1)))
+                    log_every_n_seconds(
+                        logging.INFO,
+                        (
+                            f"Inference done {idx + 1}/{total}. "
+                            f"Dataloading: {data_seconds_per_iter:.4f} s/iter. "
+                            f"Inference: {compute_seconds_per_iter:.4f} s/iter. "
+                            f"Eval: {eval_seconds_per_iter:.4f} s/iter. "
+                            f"Total: {total_seconds_per_iter:.4f} s/iter. "
+                            f"ETA={eta}"
+                        ),
+                        n=5,
+                    )
+                start_data_time = time.perf_counter()
+
+        file_out = self.cfg.OUTPUT_DIR + '/inference/pseudo_labels.json'
+        with open(file_out, 'w') as f_out:
+            json.dump(pseudo_dicts, f_out)
+
+        dataset_name = 'cityscapes_foggy_pseudo_labels'
+        if 'cityscapes_foggy_pseudo_labels' in DatasetCatalog:
+            DatasetCatalog.pop('cityscapes_foggy_pseudo_labels')
+        DatasetCatalog.register(dataset_name, lambda: load_pseudo_dicts(file_out))
+        meta = MetadataCatalog.get('cityscapes_foggy_train').as_dict()
+        meta['name'] = dataset_name
+        meta['gt_dir'] = file_out.rsplit('/',1)[0] + '/'
+        if 'json_file' in meta.keys():
+            meta.pop('json_file')
+        MetadataCatalog.get(dataset_name).set(**meta)
+
+        # Measure the time only for this worker (before the synchronization barrier)
+        total_time = time.perf_counter() - start_time
+        total_time_str = str(datetime.timedelta(seconds=total_time))
+        # NOTE this format is parsed by grep
+        logger.info(
+            "Total inference time: {} ({:.6f} s / iter per device, on {} devices)".format(
+                total_time_str, total_time / (total - num_warmup), num_devices
+            )
+        )
+        total_compute_time_str = str(datetime.timedelta(seconds=int(total_compute_time)))
+        logger.info(
+            "Total inference pure compute time: {} ({:.6f} s / iter per device, on {} devices)".format(
+                total_compute_time_str, total_compute_time / (total - num_warmup), num_devices
+            )
+        )
+
+        results = evaluator.evaluate()
+        # An evaluator may return None when not in main process.
+        # Replace it by an empty dict instead to make it easier for downstream code to handle
+        if results is None:
+            results = {}
+
+        # cur_threshold = self.cfg.SEMISUPNET.BBOX_THRESHOLD
+        # self.gen_eval_pseudo_label(outputs, cur_threshold)
+        return results
+
+    def inference_on_dataset_pseudo(self, model, data_loader, evaluator, evaluator_pseudo=None):
+        """
+        Run model on the data_loader and evaluate the metrics with evaluator.
+        Also benchmark the inference speed of `model.__call__` accurately.
+        The model will be used in eval mode.
+
+        Args:
+            model (callable): a callable which takes an object from
+                `data_loader` and returns some outputs.
+
+                If it's an nn.Module, it will be temporarily set to `eval` mode.
+                If you wish to evaluate a model in `training` mode instead, you can
+                wrap the given model and override its behavior of `.eval()` and `.train()`.
+            data_loader: an iterable object with a length.
+                The elements it generates will be the inputs to the model.
+            evaluator: the evaluator(s) to run. Use `None` if you only want to benchmark,
+                but don't want to do any evaluation.
+
+        Returns:
+            The return value of `evaluator.evaluate()`
+        """
+        if evaluator_pseudo is None:
+            results = inference_on_dataset(model, data_loader, evaluator)
+            return results, None
+
+        num_devices = get_world_size()
+        logger = logging.getLogger(__name__)
+        logger.info("Start inference on {} batches".format(len(data_loader)))
+
+        total = len(data_loader)  # inference data loader must have a fixed length
+        if evaluator is None:
+            # create a no-op evaluator
+            evaluator = DatasetEvaluators([])
+        if isinstance(evaluator, abc.MutableSequence):
+            evaluator = DatasetEvaluators(evaluator)
+        evaluator.reset()
+        evaluator_pseudo.reset()
+
+        num_warmup = min(5, total - 1)
+        start_time = time.perf_counter()
+        total_data_time = 0
+        total_compute_time = 0
+        total_eval_time = 0
+        with ExitStack() as stack:
+            if isinstance(model, nn.Module):
+                stack.enter_context(inference_context(model))
+            stack.enter_context(torch.no_grad())
+
+            start_data_time = time.perf_counter()
+            for idx, inputs in enumerate(data_loader):
+                total_data_time += time.perf_counter() - start_data_time
+                if idx == num_warmup:
+                    start_time = time.perf_counter()
+                    total_data_time = 0
+                    total_compute_time = 0
+                    total_eval_time = 0
+
+                start_compute_time = time.perf_counter()
+                outputs = model(inputs)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                total_compute_time += time.perf_counter() - start_compute_time
+
+                start_eval_time = time.perf_counter()
+                evaluator.process(inputs, outputs)
+                evaluator_pseudo.process(inputs, outputs)
+                total_eval_time += time.perf_counter() - start_eval_time
+
+                iters_after_start = idx + 1 - num_warmup * int(idx >= num_warmup)
+                data_seconds_per_iter = total_data_time / iters_after_start
+                compute_seconds_per_iter = total_compute_time / iters_after_start
+                eval_seconds_per_iter = total_eval_time / iters_after_start
+                total_seconds_per_iter = (time.perf_counter() - start_time) / iters_after_start
+                if idx >= num_warmup * 2 or compute_seconds_per_iter > 5:
+                    eta = datetime.timedelta(seconds=int(total_seconds_per_iter * (total - idx - 1)))
+                    log_every_n_seconds(
+                        logging.INFO,
+                        (
+                            f"Inference done {idx + 1}/{total}. "
+                            f"Dataloading: {data_seconds_per_iter:.4f} s/iter. "
+                            f"Inference: {compute_seconds_per_iter:.4f} s/iter. "
+                            f"Eval: {eval_seconds_per_iter:.4f} s/iter. "
+                            f"Total: {total_seconds_per_iter:.4f} s/iter. "
+                            f"ETA={eta}"
+                        ),
+                        n=5,
+                    )
+                start_data_time = time.perf_counter()
+
+        # Measure the time only for this worker (before the synchronization barrier)
+        total_time = time.perf_counter() - start_time
+        total_time_str = str(datetime.timedelta(seconds=total_time))
+        # NOTE this format is parsed by grep
+        logger.info(
+            "Total inference time: {} ({:.6f} s / iter per device, on {} devices)".format(
+                total_time_str, total_time / (total - num_warmup), num_devices
+            )
+        )
+        total_compute_time_str = str(datetime.timedelta(seconds=int(total_compute_time)))
+        logger.info(
+            "Total inference pure compute time: {} ({:.6f} s / iter per device, on {} devices)".format(
+                total_compute_time_str, total_compute_time / (total - num_warmup), num_devices
+            )
+        )
+
+        results = evaluator.evaluate()
+        results_pseudo = evaluator_pseudo.evaluate()
+        # An evaluator may return None when not in main process.
+        # Replace it by an empty dict instead to make it easier for downstream code to handle
+        if results is None:
+            results = {}
+        return results, results_pseudo
+    
+def load_pseudo_dicts(filename):
+    with open(filename, 'r') as f_in:
+        dicts = json.load(f_in)
+
+    return dicts
+
+@contextmanager
+def inference_context(model):
+    """
+    A context where the model is temporarily changed to eval mode,
+    and restored to previous mode afterwards.
+
+    Args:
+        model: a torch Module
+    """
+    training_mode = model.training
+    model.eval()
+    yield
+    model.train(training_mode)
+
+# def temp():
+#     import matplotlib.pyplot as plt
+#     from detectron2.utils import visualizer
+
+#     i = 1
+#     fig_q = visualizer.VisImage(unlabel_data_q[i]['image'].cpu().transpose(0,2).transpose(0,1).numpy()[:,:,::-1])
+#     fig_k = visualizer.VisImage(unlabel_data_k[i]['image'].cpu().transpose(0,2).transpose(0,1).numpy()[:,:,::-1])
+
+#     unlabel_data_k[i]['instances'].pred_boxes = unlabel_data_k[i]['instances'].gt_boxes
+#     unlabel_data_k[i]['instances'].pred_classes = unlabel_data_k[i]['instances'].gt_classes
+#     unlabel_data_q[i]['instances'].pred_boxes = unlabel_data_q[i]['instances'].gt_boxes
+#     unlabel_data_q[i]['instances'].pred_classes = unlabel_data_q[i]['instances'].gt_classes
+#     fig_q_full = visualizer.Visualizer(unlabel_data_q[i]['image'].cpu().transpose(0,2).transpose(0,1).numpy()[:,:,::-1]).draw_instance_predictions(unlabel_data_q[i]['instances'])
+#     fig_k_full = visualizer.Visualizer(unlabel_data_k[i]['image'].cpu().transpose(0,2).transpose(0,1).numpy()[:,:,::-1]).draw_instance_predictions(unlabel_data_k[i]['instances'])
+
+#     plt.figure()
+#     plt.imshow(fig_q_full.get_image())
+#     plt.figure()
+#     plt.imshow(fig_q_full.get_image())
+#     plt.show()
+
+
+#     import matplotlib.pyplot as plt
+#     from detectron2.utils import visualizer
+
+#     output_instances = outputs[0]['instances'][outputs[0]['instances'].scores > 0.5]
+#     for key in output_instances.get_fields().keys():
+#         if key == 'pred_boxes':
+#             output_instances.get_fields()[key].tensor = output_instances.get_fields()[key].tensor.detach().cpu()
+#         else:
+#             output_instances.get_fields()[key] = output_instances.get_fields()[key].detach().cpu()
+#     inputs[0]['instances'].pred_boxes = inputs[0]['instances'].gt_boxes
+#     inputs[0]['instances'].pred_classes = inputs[0]['instances'].gt_classes
+#     data = json.load(open('output/at_scaled/inference/pseudo_labels.json', 'r'))
+
+#     fig = visualizer.VisImage(inputs[0]['image'].cpu().transpose(0,2).transpose(0,1).numpy()[:,:,::-1])
+#     fig_full = visualizer.Visualizer(inputs[0]['image'].cpu().transpose(0,2).transpose(0,1).numpy()[:,:,::-1]).draw_instance_predictions(inputs[0]['instances'])
+#     fig_pseud = visualizer.Visualizer(inputs[0]['image'].cpu().transpose(0,2).transpose(0,1).numpy()[:,:,::-1]).draw_dataset_dict(data[idx])
+#     fig_pred = visualizer.Visualizer(inputs[0]['image'].cpu().transpose(0,2).transpose(0,1).numpy()[:,:,::-1]).draw_instance_predictions(output_instances)
+#     plt.figure()
+#     plt.imshow(fig_pred.get_image())
+#     plt.tight_layout()
+#     plt.figure()
+#     plt.imshow(fig_pseud.get_image())
+#     plt.tight_layout()
+#     plt.figure()
+#     plt.imshow(fig_full.get_image())
+#     plt.tight_layout()
+#     plt.show()
+

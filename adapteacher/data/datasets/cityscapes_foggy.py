@@ -42,7 +42,11 @@ def _get_cityscapes_files(image_dir, gt_dir):
             # assert basename.endswith(suffix), basename
             # basename = basename[: -len(suffix)]
 
-            suffix = 'leftImg8bit_foggy'
+            if 'foggy' in basename:
+                suffix = 'leftImg8bit_foggy'
+            else:
+                suffix = 'leftImg8bit'
+            # suffix = 'leftImg8bit_foggy'
             basename = basename.split(suffix)[0]
 
             instance_file = os.path.join(city_gt_dir, basename + "gtFine_instanceIds.png")

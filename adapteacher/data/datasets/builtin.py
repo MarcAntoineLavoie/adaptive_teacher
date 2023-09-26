@@ -118,6 +118,9 @@ _RAW_CITYSCAPES_SPLITS = {
     "cityscapes_foggy_train": ("cityscapes_foggy/leftImg8bit/train/", "cityscapes_foggy/gtFine/train/"),
     "cityscapes_foggy_val": ("cityscapes_foggy/leftImg8bit/val/", "cityscapes_foggy/gtFine/val/"),
     "cityscapes_foggy_test": ("cityscapes_foggy/leftImg8bit/test/", "cityscapes_foggy/gtFine/test/"),
+    "cityscapes_train": ("cityscapes/leftImg8bit/train/", "cityscapes/gtFine/train/"),
+    "cityscapes_val": ("cityscapes/leftImg8bit/val/", "cityscapes/gtFine/val/"),
+    "cityscapes_test": ("cityscapes/leftImg8bit/test/", "cityscapes/gtFine/test/"),
 }
 
 

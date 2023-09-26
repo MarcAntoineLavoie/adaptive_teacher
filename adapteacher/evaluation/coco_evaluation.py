@@ -27,6 +27,8 @@ from detectron2.utils.logger import create_small_table
 from detectron2.evaluation import DatasetEvaluator
 from iopath.common.file_io import file_lock
 
+from .prob_cocoeval import prob_COCOeval
+
 logger = logging.getLogger(__name__)
 
 def convert_to_coco_json(dataset_name, output_file, allow_cached=True):
@@ -86,6 +88,9 @@ class COCOEvaluator(DatasetEvaluator):
         *,
         use_fast_impl=True,
         kpt_oks_sigmas=(),
+        allow_cached=True,
+        output_file='',
+        use_prob=False,
     ):
         """
         Args:
@@ -121,6 +126,8 @@ class COCOEvaluator(DatasetEvaluator):
         self._distributed = distributed
         self._output_dir = output_dir
         self._use_fast_impl = use_fast_impl
+        self._output_name = output_file
+        self._use_prob = use_prob
 
         if tasks is not None and isinstance(tasks, CfgNode):
             kpt_oks_sigmas = (
@@ -145,7 +152,7 @@ class COCOEvaluator(DatasetEvaluator):
 
             cache_path = os.path.join(output_dir, f"{dataset_name}_coco_format.json")
             self._metadata.json_file = cache_path
-            convert_to_coco_json(dataset_name, cache_path)
+            convert_to_coco_json(dataset_name, cache_path, allow_cached=allow_cached)
 
         json_file = PathManager.get_local_path(self._metadata.json_file)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -276,6 +283,7 @@ class COCOEvaluator(DatasetEvaluator):
                     kpt_oks_sigmas=self._kpt_oks_sigmas,
                     use_fast_impl=self._use_fast_impl,
                     img_ids=img_ids,
+                    use_prob=self._use_prob
                 )
                 if len(coco_results) > 0
                 else None  # cocoapi does not handle empty results very well
@@ -459,6 +467,20 @@ def instances_to_coco_json(instances, img_id):
     has_keypoints = instances.has("pred_keypoints")
     if has_keypoints:
         keypoints = instances.pred_keypoints
+    
+    if instances.has('pred_score_covs'):
+        has_cov_scores = not (instances.pred_score_covs<0).any()
+        if has_cov_scores:
+            pred_score_covs = instances.pred_score_covs.tolist()
+    else:
+        has_cov_scores = False
+
+    if instances.has('pred_box_covs'):
+        has_cov_boxes = not (instances.pred_box_covs<0).any()
+        if has_cov_boxes:
+            pred_box_covs = instances.pred_box_covs.tolist()
+    else:
+        has_cov_boxes = False
 
     results = []
     for k in range(num_instance):
@@ -478,6 +500,10 @@ def instances_to_coco_json(instances, img_id):
             # This is the inverse of data loading logic in `datasets/coco.py`.
             keypoints[k][:, :2] -= 0.5
             result["keypoints"] = keypoints[k].flatten().tolist()
+        if has_cov_scores:
+            result['score_covs'] = pred_score_covs[k]
+        if has_cov_boxes:
+            result['bbox_covs'] = pred_box_covs[k]
         results.append(result)
     return results
 
@@ -596,7 +622,7 @@ def _evaluate_box_proposals(dataset_predictions, coco_api, thresholds=None, area
 
 
 def _evaluate_predictions_on_coco(
-    coco_gt, coco_results, iou_type, kpt_oks_sigmas=None, use_fast_impl=True, img_ids=None
+    coco_gt, coco_results, iou_type, kpt_oks_sigmas=None, use_fast_impl=True, img_ids=None, use_prob=False,
 ):
     """
     Evaluate the coco results using COCOEval API.
@@ -613,7 +639,11 @@ def _evaluate_predictions_on_coco(
             c.pop("bbox", None)
 
     coco_dt = coco_gt.loadRes(coco_results)
-    coco_eval = (COCOeval_opt if use_fast_impl else COCOeval)(coco_gt, coco_dt, iou_type)
+    if use_prob:
+        coco_eval = prob_COCOeval(coco_gt, coco_dt, iou_type)
+    else:
+        coco_eval = (COCOeval_opt if use_fast_impl else COCOeval)(coco_gt, coco_dt, iou_type)
+        # coco_eval = COCOeval(coco_gt, coco_dt, iou_type)
     if img_ids is not None:
         coco_eval.params.imgIds = img_ids
 
