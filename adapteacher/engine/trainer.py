@@ -98,8 +98,8 @@ class BaselineTrainer(DefaultTrainer):
         if isinstance(self.model, DistributedDataParallel):
             # broadcast loaded data/model from the first rank, because other
             # machines may not have access to the checkpoint file
-            if TORCH_VERSION >= (1, 7):
-                self.model._sync_params_and_buffers()
+            # if TORCH_VERSION >= (1, 7):
+            #     self.model._sync_params_and_buffers()
             self.start_iter = comm.all_gather(self.start_iter)[0]
 
     def train_loop(self, start_iter: int, max_iter: int):
