@@ -104,16 +104,15 @@ if __name__ == "__main__":
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\
     #   OUTPUT_DIR output/exp_city
 
-    args.num_gpus = 1
+    # args.num_gpus = 1
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
-    args.config_file = './configs/faster_rcnn_VGG_cross_city_test.yaml'
-    args.resume = False
-    # args.resume = True
+    # args.config_file = './configs/faster_rcnn_VGG_cross_city_test.yaml'
+    # args.resume = False
+    args.resume = True
 
     # args.output_dir = './output/at_scaled'
     # args.OUTPUT_DIR = './output/temp1'
-    # args.resume = True
 
     # args.eval_only = True
 
