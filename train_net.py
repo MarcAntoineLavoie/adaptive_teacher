@@ -30,6 +30,7 @@ def setup(args):
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     # cfg = scale_configs(cfg)
+    cfg['DATALOADER']['NUM_WORKERS'] = 8
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
