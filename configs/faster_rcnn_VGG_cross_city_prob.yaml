@@ -36,10 +36,12 @@ MODEL:
     NUM_FC: 2
     POOLER_RESOLUTION: 7
     # SMOOTH_L1_BETA: 1.0
+    SMOOTH_L1_BETA_PROB: 3.0
   PROBABILISTIC_MODELING:
   # One of the following Loss types: 'none' or 'negative_log_likelihood', 'second_moment_matching', 'energy_loss'.
     BBOX_COV_LOSS:
         NAME: 'energy_loss'
+        # NAME: 'negative_log_likelihood'
         COVARIANCE_TYPE: 'diagonal' # One of the following: 'full', 'diagonal'
         NUM_SAMPLES: 1000
     ANNEALING_STEP: 10000

@@ -269,7 +269,8 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         bbox_cov_type='diagonal',
         dropout_rate=0.0,
         annealing_step=0,
-        bbox_cov_num_samples=1000
+        bbox_cov_num_samples=1000,
+        smooth_l1_beta_prob=0.0, 
     ):
         """
         NOTE: this interface is experimental.
@@ -347,6 +348,8 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         self.test_nms_thresh = test_nms_thresh
         self.test_topk_per_image = test_topk_per_image
 
+        self.smooth_l1_beta_prob = smooth_l1_beta_prob
+
     @classmethod
     def from_config(cls,
                     cfg,
@@ -380,8 +383,9 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "dropout_rate": None,
             # "annealing_step": cfg.SOLVER.STEPS[1],
             "annealing_step": cfg.MODEL.PROBABILISTIC_MODELING.ANNEALING_STEP,
-            "bbox_cov_num_samples": bbox_cov_num_samples
-            # fmt: on
+            "bbox_cov_num_samples": bbox_cov_num_samples,
+            # fmt: on,
+            "smooth_l1_beta_prob": cfg.MODEL.ROI_BOX_HEAD.SMOOTH_L1_BETA_PROB,
         }
 
     def forward(self, x):
@@ -523,7 +527,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                         # Compute regression negative log likelihood loss according to:
                         # "What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision?", NIPS 2017
                         loss_box_reg = 0.5 * torch.exp(-pred_proposal_covs) * smooth_l1_loss(
-                            pred_proposal_deltas, gt_proposals_delta, beta=self.smooth_l1_beta)
+                            pred_proposal_deltas, gt_proposals_delta, beta=self.smooth_l1_beta_prob)
                         loss_covariance_regularize = 0.5 * pred_proposal_covs
                         loss_box_reg += loss_covariance_regularize
 
@@ -548,12 +552,12 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                     # matching.
                     loss_box_reg = smooth_l1_loss(pred_proposal_deltas,
                                                 gt_proposals_delta,
-                                                self.smooth_l1_beta)
+                                                self.smooth_l1_beta_prob)
                     errors = (pred_proposal_deltas - gt_proposals_delta)
                     if self.bbox_cov_type == 'diagonal':
                         # Handel diagonal case
                         second_moment_matching_term = smooth_l1_loss(
-                            torch.exp(pred_proposal_covs), errors ** 2, beta=self.smooth_l1_beta)
+                            torch.exp(pred_proposal_covs), errors ** 2, beta=self.smooth_l1_beta_prob)
                         loss_box_reg += second_moment_matching_term
                         loss_box_reg = torch.sum(
                             loss_box_reg) / loss_reg_normalizer
@@ -574,7 +578,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                                 forecaster_cholesky, 2, 1))
 
                         second_moment_matching_term = smooth_l1_loss(
-                            predicted_covar, gt_error_covar, beta=self.smooth_l1_beta, reduction='sum')
+                            predicted_covar, gt_error_covar, beta=self.smooth_l1_beta_prob, reduction='sum')
                         loss_box_reg = (
                             torch.sum(loss_box_reg) + second_moment_matching_term) / loss_reg_normalizer
 
@@ -596,7 +600,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                     loss_covariance_regularize = - smooth_l1_loss(
                         distributions_samples_1,
                         distributions_samples_2,
-                        beta=self.smooth_l1_beta,
+                        beta=self.smooth_l1_beta_prob,
                         reduction="sum") / self.bbox_cov_num_samples   # Second term
 
                     gt_proposals_delta_samples = torch.repeat_interleave(
@@ -605,7 +609,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                     loss_first_moment_match = 2.0 * smooth_l1_loss(
                         distributions_samples_1,
                         gt_proposals_delta_samples,
-                        beta=self.smooth_l1_beta,
+                        beta=self.smooth_l1_beta_prob,
                         reduction="sum") / self.bbox_cov_num_samples  # First term
 
                     # Final Loss
