@@ -8,6 +8,10 @@ from collections import defaultdict
 import pycocotools.mask as maskUtils
 import copy
 import torch
+from detectron2.modeling.box_regression import Box2BoxTransform
+from detectron2.structures.boxes import Boxes
+from detectron2.structures import pairwise_iou
+
 
 class prob_COCOeval(COCOeval):
     def evaluate(self):
@@ -28,6 +32,8 @@ class prob_COCOeval(COCOeval):
             p.catIds = list(np.unique(p.catIds))
         p.maxDets = sorted(p.maxDets)
         self.params=p
+
+        self.bbox_dif = Box2BoxTransform((10.0, 10.0, 5.0, 5.0))
 
         self._prepare()
         # loop through images, area range, max detection number
@@ -55,21 +61,38 @@ class prob_COCOeval(COCOeval):
     def evalprobsImg(self, gt_bbox, dt_bbox, bbox_cov):
         gt_bbox = torch.tensor(gt_bbox)
         dt_bbox = torch.tensor(dt_bbox)
+        gt_bbox[2:] = gt_bbox[:2] + gt_bbox[2:]
+        dt_bbox[2:] = dt_bbox[:2] + dt_bbox[2:]
         bbox_cov = torch.tensor(bbox_cov)
 
-        lower_tri = torch.eye(len(bbox_cov)) * (bbox_cov**0.5 + 1e-6) 
-        bbox_dist = torch.distributions.multivariate_normal.MultivariateNormal(dt_bbox, scale_tril=lower_tri)
+        deltas = self.bbox_dif.get_deltas(dt_bbox.unsqueeze(0), gt_bbox.unsqueeze(0)).squeeze(0)
+
+        if (deltas > 100).any():
+            a=1
+
+        #lower_tri = torch.eye(len(bbox_cov)) * (bbox_cov**0.5 + 1e-6) 
+        #bbox_dist = torch.distributions.multivariate_normal.MultivariateNormal(torch.zeros(4), scale_tril=lower_tri)
+        bbox_dist = torch.distributions.normal.Normal(torch.zeros(4), bbox_cov**0.5)
+
+        cdf = bbox_dist.cdf(deltas)
 
         # Compute negative log probability
-        negative_log_prob = -bbox_dist.log_prob(gt_bbox)
+        negative_log_prob = -bbox_dist.log_prob(deltas).mean()
 
         # Energy Score.
         sample_set = bbox_dist.sample((1001,))
         sample_set_1 = sample_set[:-1]
         sample_set_2 = sample_set[1:]
 
-        energy_score = torch.norm((sample_set_1 - gt_bbox),dim=1).mean(0) - 0.5*torch.norm((sample_set_1 - sample_set_2), dim=1).mean(0)
-        return negative_log_prob, energy_score        
+        energy_score = torch.norm((sample_set_1),dim=1).mean(0) - 0.5*torch.norm((sample_set_1 - sample_set_2), dim=1).mean(0)
+
+
+        # GT overlap / Self Overlap
+        prob_bboxes = self.bbox_dif.apply_deltas(sample_set_1, dt_bbox.unsqueeze(0))
+        mean_IoU_GT = pairwise_iou(Boxes(prob_bboxes), Boxes(gt_bbox.unsqueeze(0))).mean()
+        mean_IoU = pairwise_iou(Boxes(prob_bboxes), Boxes(dt_bbox.unsqueeze(0))).mean()
+
+        return negative_log_prob, energy_score, mean_IoU_GT, mean_IoU, deltas, cdf
 
     def evaluateImg(self, imgId, catId, aRng, maxDet):
         '''
@@ -110,6 +133,10 @@ class prob_COCOeval(COCOeval):
         dtIg = np.zeros((T,D))
         box_NLL = np.zeros((T,D))
         box_ES = np.zeros((T,D))
+        box_gtIoU = np.zeros((T,D))
+        box_dtIoU = np.zeros((T,D))
+        box_deltas = np.zeros((T,D,4))
+        box_cdf = np.zeros((T,D,4))
 
         if not len(ious)==0:
             for tind, t in enumerate(p.iouThrs):
@@ -137,19 +164,20 @@ class prob_COCOeval(COCOeval):
                     dtm[tind,dind]  = gt[m]['id']
                     gtm[tind,m]     = d['id']
 
+        dtm_check = dtm*(dtIg-1)
         matches = {}
         for lv1 in range(T):
             for lv2 in range(D):
-                if dtm[lv1, lv2]:
+                if dtm_check[lv1, lv2]:
                     ids = (self._dts[imgId, catId][lv2]['id'], dtm[lv1, lv2])
                     if ids in matches.keys():
-                        box_NLL[lv1,lv2], box_ES[lv1,lv2] = matches[ids]
+                        box_NLL[lv1,lv2], box_ES[lv1,lv2], box_gtIoU[lv1,lv2], box_dtIoU[lv1,lv2], box_deltas[lv1,lv2,:], box_cdf[lv1,lv2,:] = matches[ids]
                     else:
                         bbox_gt = [x['bbox'] for x in self._gts[imgId, catId] if x['id']==dtm[lv1,lv2]][0]
                         bbox_dt = self._dts[imgId, catId][lv2]['bbox']
                         covs_dt = self._dts[imgId, catId][lv2]['bbox_covs']
-                        box_NLL[lv1,lv2], box_ES[lv1,lv2] = self.evalprobsImg(bbox_gt, bbox_dt, covs_dt)
-                        matches[ids] = (box_NLL[lv1,lv2], box_ES[lv1,lv2])
+                        box_NLL[lv1,lv2], box_ES[lv1,lv2], box_gtIoU[lv1,lv2], box_dtIoU[lv1,lv2], box_deltas[lv1,lv2,:], box_cdf[lv1,lv2,:] = self.evalprobsImg(bbox_gt, bbox_dt, covs_dt)
+                        matches[ids] = (box_NLL[lv1,lv2], box_ES[lv1,lv2], box_gtIoU[lv1,lv2], box_dtIoU[lv1,lv2], box_deltas[lv1,lv2,:], box_cdf[lv1,lv2,:])
 
         # set unmatched detections outside of area range to ignore
         a = np.array([d['area']<aRng[0] or d['area']>aRng[1] for d in dt]).reshape((1, len(dt)))
@@ -169,6 +197,10 @@ class prob_COCOeval(COCOeval):
                 'dtIgnore':     dtIg,
                 'dtBoxNLL':     box_NLL,
                 'dtBoxES':      box_ES,
+                'gtIoUs':       box_gtIoU,
+                'dtIoUs':       box_dtIoU,
+                'dtDeltas':     box_deltas,
+                'dtCDF':        box_cdf,
             }
     
     def accumulate(self, p = None):
@@ -208,6 +240,12 @@ class prob_COCOeval(COCOeval):
         i_list = [n for n, i in enumerate(p.imgIds)  if i in setI]
         I0 = len(_pe.imgIds)
         A0 = len(_pe.areaRng)
+
+        dtIoUs = []
+        gtIoUs = []
+        cdfs = []
+        deltas = []
+
         # retrieve E at each category, area range, and max number of detections
         for k, k0 in enumerate(k_list):
             Nk = k0*A0*I0
@@ -267,6 +305,15 @@ class prob_COCOeval(COCOeval):
                             pass
                         precision[t,:,k,a,m] = np.array(q)
                         scores[t,:,k,a,m] = np.array(ss)
+
+                    for e in E:
+                        dtIoUs = dtIoUs + e['dtIoUs'][0,:].tolist()
+                        gtIoUs = gtIoUs + e['gtIoUs'][0,:].tolist()
+                        cdfs = cdfs + e['dtCDF'][0,:,:].tolist()
+                        deltas = deltas + e['dtDeltas'][0,:,:].tolist()
+                        if (e['dtDeltas'][0,:,:] > 10).any():
+                            a=1
+
         self.eval = {
             'params': p,
             'counts': [T, R, K, A, M],
@@ -277,3 +324,57 @@ class prob_COCOeval(COCOeval):
         }
         toc = time.time()
         print('DONE (t={:0.2f}s).'.format( toc-tic))
+
+
+# import matplotlib.pyplot as plt
+# dtIoUs_2 = [x for x in dtIoUs if x > 0]
+# gtIoUs_2 = [x for x in gtIoUs if x > 0]
+
+# bins=np.arange(0,1.05,0.05)
+# fig = plt.figure()
+# axs = fig.subplots(2, 2, sharex=True, sharey=True)
+# axs[0,0].hist(cdfs_2[:,0], bins=bins, cumulative=True, density=True)
+# axs[0,0].plot(np.arange(0,1.1,0.1), np.arange(0,1.1,0.1),':')
+# axs[0,0].set_xlabel('x error cdf')
+# axs[0,1].hist(cdfs_2[:,1], bins=bins, cumulative=True, density=True)
+# axs[0,1].plot(np.arange(0,1.1,0.1), np.arange(0,1.1,0.1),':')
+# axs[0,1].set_xlabel('y error cdf')
+# axs[1,0].hist(cdfs_2[:,2], bins=bins, cumulative=True, density=True)
+# axs[1,0].plot(np.arange(0,1.1,0.1), np.arange(0,1.1,0.1),':')
+# axs[1,0].set_xlabel('width error cdf')
+# axs[1,1].hist(cdfs_2[:,3], bins=bins, cumulative=True, density=True)
+# axs[1,1].plot(np.arange(0,1.1,0.1), np.arange(0,1.1,0.1),':')
+# axs[1,1].set_xlabel('height error cdf')
+# fig.suptitle('Calibration Plots')
+# plt.tight_layout()
+
+
+# plt.figure
+# plt.hist(dtIoUs_2, alpha=1.0)
+# plt.xlabel('Predicted Overlap')
+
+# cdfs_2 = np.array([x for x in cdfs if any(x) > 0])
+# deltas_2 = np.array([x for x in deltas if any(abs(y) for y in x) > 0])
+
+# plt.figure();plt.hist(cdfs_2[:,0], bins=bins, cumulative=True, density=True);plt.plot(np.arange(0,1.1,0.1), np.arange(0,1.1,0.1),':')
+
+# xs = np.arange(-4.0,4.1,0.1)
+# ys = np.e**(-0.5*xs**2)/(2*np.pi)**.5
+# bins_ = xs
+# plt.figure();plt.hist(deltas_2[:,0], density=True, bins=bins_);plt.plot(xs,ys)
+# plt.figure();plt.hist(deltas_2[:,1], density=True, bins=bins_);plt.plot(xs,ys)
+# plt.show()
+
+# import json
+# with open('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy_val_coco_format.json','r') as f_in:
+#     data = json.load(f_in)
+
+# vals = [x for x in data['annotations'] if x['image_id'] == 'frankfurt_000000_011461_leftImg8bit_foggy_beta_0.005.png']
+# from detectron2.structures.boxes import BoxMode
+# for val in vals:
+#     val['bbox_mode'] = BoxMode.XYWH_ABS
+# vals = {'annotations':vals}
+
+# img = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/leftImg8bit/val/frankfurt/frankfurt_000000_011461_leftImg8bit_foggy_beta_0.005.png')
+# img2 = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/gtFine/val/frankfurt/frankfurt_000000_011461_gtFine_instanceIds.png')
+# img3 = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/gtFine/val/frankfurt/frankfurt_000000_011461_gtFine_labelIds.png')

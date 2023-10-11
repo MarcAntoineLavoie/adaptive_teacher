@@ -122,8 +122,8 @@ class BaselineTrainer(DefaultTrainer):
         if isinstance(self.model, DistributedDataParallel):
             # broadcast loaded data/model from the first rank, because other
             # machines may not have access to the checkpoint file
-            if TORCH_VERSION >= (1, 7):
-                self.model._sync_params_and_buffers()
+            # if TORCH_VERSION >= (1, 7):
+            #     self.model._sync_params_and_buffers()
             self.start_iter = comm.all_gather(self.start_iter)[0]
 
     def train_loop(self, start_iter: int, max_iter: int):
@@ -349,9 +349,11 @@ class ATeacherTrainer(DefaultTrainer):
         self.max_iter = cfg.SOLVER.MAX_ITER
         self.cfg = cfg
 
-        self.probe = OpenMatchTrainerProbe(cfg)
-        self.register_hooks(self.build_hooks_final()) 
+        self.loss_dict = {}
+
+        self.probe = OpenMatchTrainerProbe(cfg) 
         self.register_hooks(self.build_hooks())
+        self.register_hooks(self.build_hooks_final())
 
     def resume_or_load(self, resume=True):
         """
@@ -375,8 +377,8 @@ class ATeacherTrainer(DefaultTrainer):
         if isinstance(self.model, DistributedDataParallel):
             # broadcast loaded data/model from the first rank, because other
             # machines may not have access to the checkpoint file
-            #if TORCH_VERSION >= (1, 7):
-            #    self.model._sync_params_and_buffers()
+            # if TORCH_VERSION >= (1, 7):
+            #     self.model._sync_params_and_buffers()
             self.start_iter = comm.all_gather(self.start_iter)[0]
 
     @classmethod
@@ -387,7 +389,8 @@ class ATeacherTrainer(DefaultTrainer):
         evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
 
         if evaluator_type == "coco":
-            use_prob = True if cfg.MODEL.META_ARCHITECTURE == 'ProbDATwoStagePseudoLabGeneralizedRCNN' else False
+            # use_prob = True if cfg.MODEL.META_ARCHITECTURE == 'ProbDATwoStagePseudoLabGeneralizedRCNN' else False
+            use_prob = False
             evaluator_list.append(COCOEvaluator(
                 dataset_name, output_dir=output_folder, allow_cached=allow_cached, use_prob=use_prob))
         elif evaluator_type == "pascal_voc":
@@ -729,6 +732,10 @@ class ATeacherTrainer(DefaultTrainer):
             for key in metrics_dict.keys():
                 if key[:4] == "loss":
                     loss_dict[key] = metrics_dict[key]
+                    if key in self.loss_dict:
+                        self.loss_dict[key].append(metrics_dict[key])
+                    else:
+                        self.loss_dict[key] = [metrics_dict[key]]
 
             total_losses_reduced = sum(loss for loss in loss_dict.values())
 

@@ -181,8 +181,9 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
                         proposals_per_image.proposal_boxes = Boxes(pred_boxes_per_image)
             return losses, predictions
         else:
-
-            pred_instances, _ = self.box_predictor.inference(predictions, proposals)
+            pred_instances, ids_ = self.box_predictor.inference(predictions, proposals)
+            for instance, proposal, ids in zip(pred_instances, proposals, ids_):
+                instance.rpn_score = proposal.objectness_logits[ids]
             return pred_instances, predictions
 
     @torch.no_grad()
@@ -589,8 +590,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                         (self.bbox_cov_num_samples + 1,))
 
                     distributions_samples_1 = distributions_samples[0:self.bbox_cov_num_samples, :, :]
-                    distributions_samples_2 = distributions_samples[1:
-                                                                    self.bbox_cov_num_samples + 1, :, :]
+                    distributions_samples_2 = distributions_samples[1:self.bbox_cov_num_samples + 1, :, :]
 
                     # Compute energy score
                     loss_covariance_regularize = - smooth_l1_loss(
@@ -855,3 +855,22 @@ def prob_fast_rcnn_inference_single_image(
     else:
         result.pred_score_covs = -torch.ones_like(scores)
     return result, filter_inds[:, 0]
+
+# import matplotlib.pyplot as plt
+
+# v2 = 666/20
+# v1 = 1333/41
+# new_boxes = torch.zeros(41,20,4)
+# for i in range(41):
+#     for j in range(20):
+#         new_boxes[i,j,:] = torch.tensor([i*v1, j*v2, (i+1)*v1, (j+1)*v2])
+
+# box_features2 = self.box_pooler([features[0]], [Boxes(new_boxes.reshape(820,4).cuda())])
+# box_features3 = self.box_head(box_features2)
+# predictions2 = self.box_predictor(box_features3)
+# predictions3 = torch.softmax(predictions2[0][:,:8], dim=1)
+# im_cls = predictions3.reshape(41,20,8).transpose(0,2).transpose(1,2).unsqueeze(0).cpu()
+# im_big = F.interpolate(im_cls, size=(1333, 667), mode='bicubic', align_corners=False).squeeze().transpose(0,2)
+
+# im_test = im_big[:,:,2]
+# plt.figure();plt.imshow(im_test);plt.show()

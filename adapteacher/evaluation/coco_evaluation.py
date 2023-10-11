@@ -481,6 +481,11 @@ def instances_to_coco_json(instances, img_id):
             pred_box_covs = instances.pred_box_covs.tolist()
     else:
         has_cov_boxes = False
+    
+    if instances.has('rpn_score'):
+        has_rpn_scores = True
+    else:
+        has_rpn_scores = False
 
     results = []
     for k in range(num_instance):
@@ -504,6 +509,8 @@ def instances_to_coco_json(instances, img_id):
             result['score_covs'] = pred_score_covs[k]
         if has_cov_boxes:
             result['bbox_covs'] = pred_box_covs[k]
+        if has_rpn_scores:
+            result['rpn_score'] = instances.rpn_score.tolist()[k]
         results.append(result)
     return results
 

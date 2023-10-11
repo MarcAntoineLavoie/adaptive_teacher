@@ -1,7 +1,7 @@
 _BASE_: "./Base-RCNN-C4.yaml"
-# OUTPUT_DIR: "output/test_cov"
+OUTPUT_DIR: "output/test_cov"
 # OUTPUT_DIR: "output/test_cov2"
-OUTPUT_DIR: "output/test_cov_temp1"
+# OUTPUT_DIR: "output/test_cov_temp1"
 INPUT:
   CLEAN_DETECTIONS: False
   MAX_OCCLUSION: 0.5
@@ -35,6 +35,7 @@ MODEL:
     NAME: "FastRCNNConvFCHead"
     NUM_FC: 2
     POOLER_RESOLUTION: 7
+    # SMOOTH_L1_BETA: 1.0
   PROBABILISTIC_MODELING:
   # One of the following Loss types: 'none' or 'negative_log_likelihood', 'second_moment_matching', 'energy_loss'.
     BBOX_COV_LOSS:
