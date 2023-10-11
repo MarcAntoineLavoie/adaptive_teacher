@@ -27,6 +27,7 @@ def setup(args):
     add_ateacher_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
+    cfg['DATALOADER']['NUM_WORKERS'] = 16
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
@@ -68,6 +69,7 @@ def main(args):
 
 if __name__ == "__main__":
     args = default_argument_parser().parse_args()
+    args.resume = True
 
     print("Command Line Args:", args)
     launch(
