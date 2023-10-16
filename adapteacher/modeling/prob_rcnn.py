@@ -118,6 +118,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         branch="",
         compute_val_loss=False,
         unsup=False,
+        current_step=0,
     ) -> Tuple[List[Instances], Dict[str, torch.Tensor]]:
 
         del images
@@ -140,7 +141,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
         if (self.training and compute_loss) or compute_val_loss:
             losses, _ = self._forward_box(
-                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup
+                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup, current_step=current_step
             )
             return proposals, losses
         else:
@@ -158,6 +159,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         compute_val_loss: bool = False,
         branch: str = "",
         unsup: bool = False,
+        current_step = 0,
     ) -> Union[Dict[str, torch.Tensor], List[Instances]]:
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
@@ -168,7 +170,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         if (
             self.training and compute_loss
         ) or compute_val_loss:  # apply if training loss or val loss
-            losses = self.box_predictor.losses(predictions, proposals, unsup=unsup)
+            losses = self.box_predictor.losses(predictions, proposals, unsup=unsup, current_step=current_step)
 
             if self.train_on_pred_boxes:
                 with torch.no_grad():
@@ -521,9 +523,6 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
                 if self.bbox_cov_loss == 'negative_log_likelihood':
                     if self.bbox_cov_type == 'diagonal':
-                        # Ger foreground proposals.
-                        _proposals_boxes = proposals_boxes.tensor[fg_inds]
-
                         # Compute regression negative log likelihood loss according to:
                         # "What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision?", NIPS 2017
                         loss_box_reg = 0.5 * torch.exp(-pred_proposal_covs) * smooth_l1_loss(

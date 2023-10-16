@@ -646,6 +646,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 targets=gt_instances,
                 branch=branch,
                 unsup=False,
+                current_step=self.iter
             )
 
             # visualization

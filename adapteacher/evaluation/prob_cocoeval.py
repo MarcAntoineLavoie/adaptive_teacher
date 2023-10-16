@@ -326,6 +326,8 @@ class prob_COCOeval(COCOeval):
         print('DONE (t={:0.2f}s).'.format( toc-tic))
 
 
+# for id 
+
 # import matplotlib.pyplot as plt
 # dtIoUs_2 = [x for x in dtIoUs if x > 0]
 # gtIoUs_2 = [x for x in gtIoUs if x > 0]
@@ -361,8 +363,9 @@ class prob_COCOeval(COCOeval):
 # xs = np.arange(-4.0,4.1,0.1)
 # ys = np.e**(-0.5*xs**2)/(2*np.pi)**.5
 # bins_ = xs
-# plt.figure();plt.hist(deltas_2[:,0], density=True, bins=bins_);plt.plot(xs,ys)
-# plt.figure();plt.hist(deltas_2[:,1], density=True, bins=bins_);plt.plot(xs,ys)
+
+# plt.hist(deltas_2[:,0], density=True, bins=bins_);plt.plot(xs,ys)
+# plt.hist(deltas_2[:,1], density=True, bins=bins_);plt.plot(xs,ys)
 # plt.show()
 
 # import json
@@ -378,3 +381,21 @@ class prob_COCOeval(COCOeval):
 # img = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/leftImg8bit/val/frankfurt/frankfurt_000000_011461_leftImg8bit_foggy_beta_0.005.png')
 # img2 = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/gtFine/val/frankfurt/frankfurt_000000_011461_gtFine_instanceIds.png')
 # img3 = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/gtFine/val/frankfurt/frankfurt_000000_011461_gtFine_labelIds.png')
+
+
+# fig = plt.figure()
+# axs = fig.subplots(2, 2, sharex=True, sharey=True)
+# axs[0,0].hist(deltas_2[:,0], bins=bins, density=True)
+# axs[0,0].plot(xs,ys,':')
+# axs[0,0].set_xlabel('x error')
+# axs[0,1].hist(deltas_2[:,1], bins=bins, density=True)
+# axs[0,1].plot(xs,ys,':')
+# axs[0,1].set_xlabel('y error')
+# axs[1,0].hist(deltas_2[:,2], bins=bins, density=True)
+# axs[1,0].plot(xs,ys,':')
+# axs[1,0].set_xlabel('width error')
+# axs[1,1].hist(deltas_2[:,3], bins=bins, density=True)
+# axs[1,1].plot(xs,ys,':')
+# axs[1,1].set_xlabel('height error')
+# fig.suptitle('Error Histograms')
+# plt.tight_layout()
