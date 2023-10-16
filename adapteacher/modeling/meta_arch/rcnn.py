@@ -470,6 +470,8 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         self.proposal_generator = proposal_generator
         self.roi_heads = roi_heads
 
+        self.iter = 0
+
         # self.bbox_cov_loss = bbox_cov_loss
         # self.compute_bbox_cov = self.bbox_cov_loss != 'none'
         # self.bbox_cov_num_samples = bbox_cov_num_samples
