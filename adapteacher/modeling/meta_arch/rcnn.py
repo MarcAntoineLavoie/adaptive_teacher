@@ -629,6 +629,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
 
         # TODO: remove the usage of if else here. This needs to be re-organized
         if branch == "supervised":
+            self.iter += 1
             features_s = grad_reverse(features[self.dis_type])
             D_img_out_s = self.D_img(features_s)
             loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))

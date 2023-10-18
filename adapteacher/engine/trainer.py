@@ -436,7 +436,7 @@ class ATeacherTrainer(DefaultTrainer):
                 self.before_train()
 
                 for self.iter in range(start_iter, max_iter):
-                    self.model.iter = self.iter
+                    # self.model.iter = self.iter
                     self.before_step()
                     self.run_step_full_semisup()
                     self.after_step()
