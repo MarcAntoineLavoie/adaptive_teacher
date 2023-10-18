@@ -436,6 +436,7 @@ class ATeacherTrainer(DefaultTrainer):
                 self.before_train()
 
                 for self.iter in range(start_iter, max_iter):
+                    self.model.iter = self.iter
                     self.before_step()
                     self.run_step_full_semisup()
                     self.after_step()
@@ -546,7 +547,7 @@ class ATeacherTrainer(DefaultTrainer):
 
         data_time = time.perf_counter() - start
 
-        self.model.iter = self.iter + 1
+        print(self.iter, self.model.iter)
 
         # burn-in stage (supervised training with labeled data)
         if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP:
