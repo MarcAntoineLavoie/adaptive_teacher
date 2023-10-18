@@ -628,6 +628,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                                                           reduction="sum",)
                 standard_regression_loss = standard_regression_loss / loss_reg_normalizer
 
+                print(current_step)
                 probabilistic_loss_weight = get_probabilistic_loss_weight(
                     current_step, self.annealing_step)
 
