@@ -547,7 +547,7 @@ class ATeacherTrainer(DefaultTrainer):
 
         data_time = time.perf_counter() - start
 
-        print(self.iter, self.model.iter)
+        # print('outside', self.iter)
 
         # burn-in stage (supervised training with labeled data)
         if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP:
