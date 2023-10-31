@@ -352,8 +352,9 @@ class ATeacherTrainer(DefaultTrainer):
         self.loss_dict = {}
 
         self.probe = OpenMatchTrainerProbe(cfg) 
-        self.register_hooks(self.build_hooks_final())
+        
         self.register_hooks(self.build_hooks())
+        self.register_hooks(self.build_hooks_final())
         # self.register_hooks(self.build_hooks_final())
 
         self.prob_iou = cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU
@@ -392,8 +393,8 @@ class ATeacherTrainer(DefaultTrainer):
         evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
 
         if evaluator_type == "coco":
-            use_prob = True if cfg.MODEL.META_ARCHITECTURE == 'ProbDATwoStagePseudoLabGeneralizedRCNN' else False
-            # use_prob = False
+            # use_prob = True if cfg.MODEL.META_ARCHITECTURE == 'ProbDATwoStagePseudoLabGeneralizedRCNN' else False
+            use_prob = False
             evaluator_list.append(COCOEvaluator(
                 dataset_name, output_dir=output_folder, allow_cached=allow_cached, use_prob=use_prob))
         elif evaluator_type == "pascal_voc":
@@ -575,7 +576,7 @@ class ATeacherTrainer(DefaultTrainer):
 
         data_time = time.perf_counter() - start
 
-        # print('outside', self.iter)
+        # print(self.iter, self.model.iter)
 
         # burn-in stage (supervised training with labeled data)
         if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP:

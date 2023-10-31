@@ -648,7 +648,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
         return {"loss_cls": loss_cls, "loss_box_reg": loss_box_reg}
 
-    def inference(self, predictions, proposals):
+    def inference(self, predictions, proposals, unsup=0):
         """
         Returns:
             list[Instances]: same as `fast_rcnn_inference`.
@@ -681,7 +681,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             self.test_score_thresh,
             self.test_nms_thresh,
             self.test_topk_per_image,
-            self.prob_iou,
+            self.prob_iou*unsup,
         )
 
     def predict_boxes_for_gt_classes(self, predictions, proposals):
