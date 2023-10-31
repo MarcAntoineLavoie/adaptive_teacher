@@ -352,8 +352,11 @@ class ATeacherTrainer(DefaultTrainer):
         self.loss_dict = {}
 
         self.probe = OpenMatchTrainerProbe(cfg) 
-        self.register_hooks(self.build_hooks())
         self.register_hooks(self.build_hooks_final())
+        self.register_hooks(self.build_hooks())
+        # self.register_hooks(self.build_hooks_final())
+
+        self.prob_iou = cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU
 
     def resume_or_load(self, resume=True):
         """
@@ -389,8 +392,8 @@ class ATeacherTrainer(DefaultTrainer):
         evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
 
         if evaluator_type == "coco":
-            # use_prob = True if cfg.MODEL.META_ARCHITECTURE == 'ProbDATwoStagePseudoLabGeneralizedRCNN' else False
-            use_prob = False
+            use_prob = True if cfg.MODEL.META_ARCHITECTURE == 'ProbDATwoStagePseudoLabGeneralizedRCNN' else False
+            # use_prob = False
             evaluator_list.append(COCOEvaluator(
                 dataset_name, output_dir=output_folder, allow_cached=allow_cached, use_prob=use_prob))
         elif evaluator_type == "pascal_voc":
@@ -483,6 +486,24 @@ class ATeacherTrainer(DefaultTrainer):
             new_proposal_inst.scores = proposal_bbox_inst.scores[valid_map]
 
         return new_proposal_inst
+    
+    def threshold_self(self, proposal_bbox_inst, thres=0.7):
+        valid_map = proposal_bbox_inst.iou > thres
+
+        # create instances containing boxes and gt_classes
+        image_shape = proposal_bbox_inst.image_size
+        new_proposal_inst = Instances(image_shape)
+
+        # create box
+        new_bbox_loc = proposal_bbox_inst.pred_boxes.tensor[valid_map, :]
+        new_boxes = Boxes(new_bbox_loc)
+
+        # add boxes to instances
+        new_proposal_inst.gt_boxes = new_boxes
+        new_proposal_inst.gt_classes = proposal_bbox_inst.pred_classes[valid_map]
+        new_proposal_inst.scores = proposal_bbox_inst.scores[valid_map]
+
+        return new_proposal_inst
 
     def process_pseudo_label(
         self, proposals_rpn_unsup_k, cur_threshold, proposal_type, psedo_label_method=""
@@ -491,7 +512,14 @@ class ATeacherTrainer(DefaultTrainer):
         num_proposal_output = 0.0
         for proposal_bbox_inst in proposals_rpn_unsup_k:
             # thresholding
-            if psedo_label_method == "thresholding":
+            if self.prob_iou:
+                if proposal_type == 'roih':
+                    proposal_bbox_inst = self.threshold_self(proposal_bbox_inst, thres=cur_threshold,)
+                else:
+                    proposal_bbox_inst = self.threshold_bbox(
+                    proposal_bbox_inst, thres=cur_threshold, proposal_type=proposal_type
+                )
+            elif psedo_label_method == "thresholding":
                 proposal_bbox_inst = self.threshold_bbox(
                     proposal_bbox_inst, thres=cur_threshold, proposal_type=proposal_type
                 )
@@ -1072,90 +1100,123 @@ class ATeacherTrainer(DefaultTrainer):
         Returns:
             The return value of `evaluator.evaluate()`
         """
-        num_devices = get_world_size()
-        logger = logging.getLogger(__name__)
-        logger.info("Start inference on {} batches".format(len(data_loader)))
-
-        total = len(data_loader)  # inference data loader must have a fixed length
-        if evaluator is None:
-            # create a no-op evaluator
-            evaluator = DatasetEvaluators([])
-        if isinstance(evaluator, abc.MutableSequence):
-            evaluator = DatasetEvaluators(evaluator)
-        evaluator.reset()
-
-        num_warmup = min(5, total - 1)
-        start_time = time.perf_counter()
-        total_data_time = 0
-        total_compute_time = 0
-        total_eval_time = 0
-        pseudo_dicts = []
-        with ExitStack() as stack:
-            if isinstance(model, nn.Module):
-                stack.enter_context(inference_context(model))
-            stack.enter_context(torch.no_grad())
-
-            start_data_time = time.perf_counter()
-            for idx, inputs in enumerate(data_loader):
-                total_data_time += time.perf_counter() - start_data_time
-                if idx == num_warmup:
-                    start_time = time.perf_counter()
-                    total_data_time = 0
-                    total_compute_time = 0
-                    total_eval_time = 0
-
-                start_compute_time = time.perf_counter()
-                outputs = model(inputs)
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                total_compute_time += time.perf_counter() - start_compute_time
-
-                curr_thresh = self.cfg.SEMISUPNET.BBOX_THRESHOLD
-                pred_insts = outputs[0]['instances'][outputs[0]['instances'].scores > curr_thresh]
-                annotations = []
-                for idx in range(pred_insts.pred_boxes.tensor.shape[0]):
-                    annotation = {'iscrowd': False,
-                                  'category_id': pred_insts.pred_classes[idx].item(),
-                                  'bbox': tuple(pred_insts.pred_boxes.tensor[idx,:].tolist()),
-                                  'bbox_mode': BoxMode.XYXY_ABS,}
-                    annotations.append(annotation)
-
-                pred_dict = {'annotations': annotations}
-                for key in inputs[0].keys():
-                    # if key != 'image':
-                    if key not in ['instances', 'image']:
-                        pred_dict[key] = inputs[0][key]
-
-                pseudo_dicts.append(pred_dict)
-
-                start_eval_time = time.perf_counter()
-                evaluator.process(inputs, outputs)
-                total_eval_time += time.perf_counter() - start_eval_time
-
-                iters_after_start = idx + 1 - num_warmup * int(idx >= num_warmup)
-                data_seconds_per_iter = total_data_time / iters_after_start
-                compute_seconds_per_iter = total_compute_time / iters_after_start
-                eval_seconds_per_iter = total_eval_time / iters_after_start
-                total_seconds_per_iter = (time.perf_counter() - start_time) / iters_after_start
-                if idx >= num_warmup * 2 or compute_seconds_per_iter > 5:
-                    eta = datetime.timedelta(seconds=int(total_seconds_per_iter * (total - idx - 1)))
-                    log_every_n_seconds(
-                        logging.INFO,
-                        (
-                            f"Inference done {idx + 1}/{total}. "
-                            f"Dataloading: {data_seconds_per_iter:.4f} s/iter. "
-                            f"Inference: {compute_seconds_per_iter:.4f} s/iter. "
-                            f"Eval: {eval_seconds_per_iter:.4f} s/iter. "
-                            f"Total: {total_seconds_per_iter:.4f} s/iter. "
-                            f"ETA={eta}"
-                        ),
-                        n=5,
-                    )
-                start_data_time = time.perf_counter()
-
         file_out = self.cfg.OUTPUT_DIR + '/inference/pseudo_labels.json'
-        with open(file_out, 'w') as f_out:
-            json.dump(pseudo_dicts, f_out)
+        if os.path.isfile(file_out)*0:
+            with  open(file_out, 'r') as f_in:
+                pseudo_dicts = json.load(f_in)
+            results = None
+        else:
+            num_devices = get_world_size()
+            logger = logging.getLogger(__name__)
+            logger.info("Start inference on {} batches".format(len(data_loader)))
+
+            total = len(data_loader)  # inference data loader must have a fixed length
+            if evaluator is None:
+                # create a no-op evaluator
+                evaluator = DatasetEvaluators([])
+            if isinstance(evaluator, abc.MutableSequence):
+                evaluator = DatasetEvaluators(evaluator)
+            evaluator.reset()
+
+            num_warmup = min(5, total - 1)
+            start_time = time.perf_counter()
+            total_data_time = 0
+            total_compute_time = 0
+            total_eval_time = 0
+            pseudo_dicts = []
+            with ExitStack() as stack:
+                if isinstance(model, nn.Module):
+                    stack.enter_context(inference_context(model))
+                stack.enter_context(torch.no_grad())
+
+                start_data_time = time.perf_counter()
+                for idx, inputs in enumerate(data_loader):
+                    total_data_time += time.perf_counter() - start_data_time
+                    if idx == num_warmup:
+                        start_time = time.perf_counter()
+                        total_data_time = 0
+                        total_compute_time = 0
+                        total_eval_time = 0
+
+                    start_compute_time = time.perf_counter()
+                    outputs = model(inputs)
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                    total_compute_time += time.perf_counter() - start_compute_time
+
+                    curr_thresh = self.cfg.SEMISUPNET.BBOX_THRESHOLD
+                    pred_insts = outputs[0]['instances'][outputs[0]['instances'].scores > curr_thresh]
+                    annotations = []
+                    for idx2 in range(pred_insts.pred_boxes.tensor.shape[0]):
+                        annotation = {'iscrowd': False,
+                                    'category_id': pred_insts.pred_classes[idx2].item(),
+                                    'bbox': tuple(pred_insts.pred_boxes.tensor[idx2,:].tolist()),
+                                    'bbox_mode': BoxMode.XYXY_ABS,}
+                        annotations.append(annotation)
+
+                    pred_dict = {'annotations': annotations}
+                    for key in inputs[0].keys():
+                        # if key != 'image':
+                        if key not in ['instances', 'image']:
+                            pred_dict[key] = inputs[0][key]
+
+                    pseudo_dicts.append(pred_dict)
+
+                    start_eval_time = time.perf_counter()
+                    evaluator.process(inputs, outputs)
+                    total_eval_time += time.perf_counter() - start_eval_time
+
+                    iters_after_start = idx + 1 - num_warmup * int(idx >= num_warmup)
+                    data_seconds_per_iter = total_data_time / iters_after_start
+                    compute_seconds_per_iter = total_compute_time / iters_after_start
+                    eval_seconds_per_iter = total_eval_time / iters_after_start
+                    total_seconds_per_iter = (time.perf_counter() - start_time) / iters_after_start
+                    # if idx >= num_warmup * 2 or compute_seconds_per_iter > 5:
+                    if not idx % 100:
+                        print(idx)
+                        eta = datetime.timedelta(seconds=int(total_seconds_per_iter * (total - idx - 1)))
+                        log_every_n_seconds(
+                            logging.INFO,
+                            (
+                                f"Inference done {idx + 1}/{total}. "
+                                f"Dataloading: {data_seconds_per_iter:.4f} s/iter. "
+                                f"Inference: {compute_seconds_per_iter:.4f} s/iter. "
+                                f"Eval: {eval_seconds_per_iter:.4f} s/iter. "
+                                f"Total: {total_seconds_per_iter:.4f} s/iter. "
+                                f"ETA={eta}"
+                            ),
+                            n=5,
+                        )
+                    start_data_time = time.perf_counter()
+
+            file_out = self.cfg.OUTPUT_DIR + '/inference/pseudo_labels.json'
+            with open(file_out, 'w') as f_out:
+                json.dump(pseudo_dicts, f_out)
+
+            # Measure the time only for this worker (before the synchronization barrier)
+            total_time = time.perf_counter() - start_time
+            total_time_str = str(datetime.timedelta(seconds=total_time))
+            # NOTE this format is parsed by grep
+            logger.info(
+                "Total inference time: {} ({:.6f} s / iter per device, on {} devices)".format(
+                    total_time_str, total_time / (total - num_warmup), num_devices
+                )
+            )
+            total_compute_time_str = str(datetime.timedelta(seconds=int(total_compute_time)))
+            logger.info(
+                "Total inference pure compute time: {} ({:.6f} s / iter per device, on {} devices)".format(
+                    total_compute_time_str, total_compute_time / (total - num_warmup), num_devices
+                )
+            )
+
+            results = evaluator.evaluate()
+            # An evaluator may return None when not in main process.
+            # Replace it by an empty dict instead to make it easier for downstream code to handle
+            if results is None:
+                results = {}
+
+            # cur_threshold = self.cfg.SEMISUPNET.BBOX_THRESHOLD
+            # self.gen_eval_pseudo_label(outputs, cur_threshold)
 
         dataset_name = 'cityscapes_foggy_pseudo_labels'
         if 'cityscapes_foggy_pseudo_labels' in DatasetCatalog:
@@ -1168,30 +1229,7 @@ class ATeacherTrainer(DefaultTrainer):
             meta.pop('json_file')
         MetadataCatalog.get(dataset_name).set(**meta)
 
-        # Measure the time only for this worker (before the synchronization barrier)
-        total_time = time.perf_counter() - start_time
-        total_time_str = str(datetime.timedelta(seconds=total_time))
-        # NOTE this format is parsed by grep
-        logger.info(
-            "Total inference time: {} ({:.6f} s / iter per device, on {} devices)".format(
-                total_time_str, total_time / (total - num_warmup), num_devices
-            )
-        )
-        total_compute_time_str = str(datetime.timedelta(seconds=int(total_compute_time)))
-        logger.info(
-            "Total inference pure compute time: {} ({:.6f} s / iter per device, on {} devices)".format(
-                total_compute_time_str, total_compute_time / (total - num_warmup), num_devices
-            )
-        )
 
-        results = evaluator.evaluate()
-        # An evaluator may return None when not in main process.
-        # Replace it by an empty dict instead to make it easier for downstream code to handle
-        if results is None:
-            results = {}
-
-        # cur_threshold = self.cfg.SEMISUPNET.BBOX_THRESHOLD
-        # self.gen_eval_pseudo_label(outputs, cur_threshold)
         return results
 
     def inference_on_dataset_pseudo(self, model, data_loader, evaluator, evaluator_pseudo=None):

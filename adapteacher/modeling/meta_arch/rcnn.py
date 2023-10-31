@@ -453,6 +453,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         bbox_cov_num_samples: int = 4,
         bbox_cov_type: str,
         cfg,
+        prob_iou,
         # dis_loss_weight: float = 0,
     ):
         """
@@ -517,6 +518,9 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         # self.D_img = None
         self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]) # Need to know the channel
         # self.bceLoss_func = nn.BCEWithLogitsLoss()
+
+        self.prob_iou = prob_iou
+
     def build_discriminator(self):
         self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]).to(self.device) # Need to know the channel
 
@@ -536,6 +540,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             "bbox_cov_num_samples": cfg.MODEL.PROBABILISTIC_MODELING.BBOX_COV_LOSS.NUM_SAMPLES,
             "bbox_cov_type": cfg.MODEL.PROBABILISTIC_MODELING.BBOX_COV_LOSS.COVARIANCE_TYPE,
             "cfg": cfg,
+            "prob_iou": cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU,
             # "dis_loss_ratio": cfg.xxx,
         }
 
@@ -719,6 +724,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 compute_loss=False,
                 branch=branch,
                 unsup=True,
+                prob_iou=self.prob_iou,
             )
 
             # if self.vis_period > 0:

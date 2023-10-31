@@ -92,7 +92,21 @@ class prob_COCOeval(COCOeval):
         mean_IoU_GT = pairwise_iou(Boxes(prob_bboxes), Boxes(gt_bbox.unsqueeze(0))).mean()
         mean_IoU = pairwise_iou(Boxes(prob_bboxes), Boxes(dt_bbox.unsqueeze(0))).mean()
 
-        return negative_log_prob, energy_score, mean_IoU_GT, mean_IoU, deltas, cdf
+        return negative_log_prob, energy_score, mean_IoU_GT, mean_IoU, deltas, cdf, bbox_cov
+
+    def intersect_self(self, dt_bbox, bbox_cov):
+        dt_bbox = torch.tensor(dt_bbox)
+        dt_bbox[2:] = dt_bbox[:2] + dt_bbox[2:]
+        bbox_cov = torch.tensor(bbox_cov)
+
+        bbox_dist = torch.distributions.normal.Normal(torch.zeros(4), bbox_cov**0.5)
+        sample_set = bbox_dist.sample((100,))
+
+        # GT overlap / Self Overlap
+        prob_bboxes = self.bbox_dif.apply_deltas(sample_set, dt_bbox.unsqueeze(0))
+        mean_IoU = pairwise_iou(Boxes(prob_bboxes), Boxes(dt_bbox.unsqueeze(0))).mean()
+
+        return mean_IoU
 
     def evaluateImg(self, imgId, catId, aRng, maxDet):
         '''
@@ -137,6 +151,7 @@ class prob_COCOeval(COCOeval):
         box_dtIoU = np.zeros((T,D))
         box_deltas = np.zeros((T,D,4))
         box_cdf = np.zeros((T,D,4))
+        box_cov = np.zeros((T,D,4))
 
         if not len(ious)==0:
             for tind, t in enumerate(p.iouThrs):
@@ -171,13 +186,19 @@ class prob_COCOeval(COCOeval):
                 if dtm_check[lv1, lv2]:
                     ids = (self._dts[imgId, catId][lv2]['id'], dtm[lv1, lv2])
                     if ids in matches.keys():
-                        box_NLL[lv1,lv2], box_ES[lv1,lv2], box_gtIoU[lv1,lv2], box_dtIoU[lv1,lv2], box_deltas[lv1,lv2,:], box_cdf[lv1,lv2,:] = matches[ids]
+                        box_NLL[lv1,lv2], box_ES[lv1,lv2], box_gtIoU[lv1,lv2], box_dtIoU[lv1,lv2], box_deltas[lv1,lv2,:], box_cdf[lv1,lv2,:], box_cov[lv1,lv2,:] = matches[ids]
                     else:
                         bbox_gt = [x['bbox'] for x in self._gts[imgId, catId] if x['id']==dtm[lv1,lv2]][0]
                         bbox_dt = self._dts[imgId, catId][lv2]['bbox']
                         covs_dt = self._dts[imgId, catId][lv2]['bbox_covs']
-                        box_NLL[lv1,lv2], box_ES[lv1,lv2], box_gtIoU[lv1,lv2], box_dtIoU[lv1,lv2], box_deltas[lv1,lv2,:], box_cdf[lv1,lv2,:] = self.evalprobsImg(bbox_gt, bbox_dt, covs_dt)
-                        matches[ids] = (box_NLL[lv1,lv2], box_ES[lv1,lv2], box_gtIoU[lv1,lv2], box_dtIoU[lv1,lv2], box_deltas[lv1,lv2,:], box_cdf[lv1,lv2,:])
+                        box_NLL[lv1,lv2], box_ES[lv1,lv2], box_gtIoU[lv1,lv2], box_dtIoU[lv1,lv2], box_deltas[lv1,lv2,:], box_cdf[lv1,lv2,:], box_cov[lv1,lv2,:] = self.evalprobsImg(bbox_gt, bbox_dt, covs_dt)
+                        matches[ids] = (box_NLL[lv1,lv2], box_ES[lv1,lv2], box_gtIoU[lv1,lv2], box_dtIoU[lv1,lv2], box_deltas[lv1,lv2,:], box_cdf[lv1,lv2,:], box_cov[lv1,lv2,:])
+                else:
+                    if lv1:
+                        box_dtIoU[lv1,lv2] = box_dtIoU[0,lv2]
+                    else:
+                        bbox_dt = self._dts[imgId, catId][lv2]['bbox']
+                        box_dtIoU[lv1,lv2] = self.intersect_self(bbox_dt, covs_dt)
 
         # set unmatched detections outside of area range to ignore
         a = np.array([d['area']<aRng[0] or d['area']>aRng[1] for d in dt]).reshape((1, len(dt)))
@@ -201,6 +222,7 @@ class prob_COCOeval(COCOeval):
                 'dtIoUs':       box_dtIoU,
                 'dtDeltas':     box_deltas,
                 'dtCDF':        box_cdf,
+                'dtcovs':       box_cov,
             }
     
     def accumulate(self, p = None):
@@ -245,10 +267,13 @@ class prob_COCOeval(COCOeval):
         gtIoUs = []
         cdfs = []
         deltas = []
+        bbox_covs = []
+        max_scores = []
 
         # retrieve E at each category, area range, and max number of detections
         for k, k0 in enumerate(k_list):
             Nk = k0*A0*I0
+            print(k)
             for a, a0 in enumerate(a_list):
                 Na = a0*I0
                 for m, maxDet in enumerate(m_list):
@@ -306,13 +331,16 @@ class prob_COCOeval(COCOeval):
                         precision[t,:,k,a,m] = np.array(q)
                         scores[t,:,k,a,m] = np.array(ss)
 
-                    for e in E:
-                        dtIoUs = dtIoUs + e['dtIoUs'][0,:].tolist()
-                        gtIoUs = gtIoUs + e['gtIoUs'][0,:].tolist()
-                        cdfs = cdfs + e['dtCDF'][0,:,:].tolist()
-                        deltas = deltas + e['dtDeltas'][0,:,:].tolist()
-                        if (e['dtDeltas'][0,:,:] > 10).any():
-                            a=1
+                    if a == 0 and m == 2:
+                        for e in E:
+                            dtIoUs = dtIoUs + e['dtIoUs'][0,:].tolist()
+                            gtIoUs = gtIoUs + e['gtIoUs'][0,:].tolist()
+                            cdfs = cdfs + e['dtCDF'][0,:,:].tolist()
+                            deltas = deltas + e['dtDeltas'][0,:,:].tolist()
+                            bbox_covs = bbox_covs + e['dtcovs'][0,:,:].tolist()
+                            max_scores= max_scores + e['dtScores'][0,:,:].tolist()
+                            # if (e['dtDeltas'][0,:,:] > 10).any():
+                            #     a=1
 
         self.eval = {
             'params': p,
@@ -331,6 +359,14 @@ class prob_COCOeval(COCOeval):
 # import matplotlib.pyplot as plt
 # dtIoUs_2 = [x for x in dtIoUs if x > 0]
 # gtIoUs_2 = [x for x in gtIoUs if x > 0]
+
+
+# plt.figure()
+# plt.plot(dtIoUs_2, gtIoUs_2, '.')
+# plt.xlabel('Box Self-IoU')
+# plt.ylabel('Box True IoU')
+
+# plt.figure();plt.hist2d(dtIoUs_2, gtIoUs_2, bins=100,density=True);plt.xlabel('Box Self-IoU');plt.ylabel('Box True IoU');plt.show()
 
 # bins=np.arange(0,1.05,0.05)
 # fig = plt.figure()
@@ -351,51 +387,56 @@ class prob_COCOeval(COCOeval):
 # plt.tight_layout()
 
 
-# plt.figure
-# plt.hist(dtIoUs_2, alpha=1.0)
-# plt.xlabel('Predicted Overlap')
+# # plt.figure
+# # plt.hist(dtIoUs_2, alpha=1.0)
+# # plt.xlabel('Predicted Overlap')
 
 # cdfs_2 = np.array([x for x in cdfs if any(x) > 0])
 # deltas_2 = np.array([x for x in deltas if any(abs(y) for y in x) > 0])
+# stds_2 = np.array([x for x in bbox_covs if any(abs(y) for y in x) > 0])**0.5
 
-# plt.figure();plt.hist(cdfs_2[:,0], bins=bins, cumulative=True, density=True);plt.plot(np.arange(0,1.1,0.1), np.arange(0,1.1,0.1),':')
+# # plt.figure();plt.hist(cdfs_2[:,0], bins=bins, cumulative=True, density=True);plt.plot(np.arange(0,1.1,0.1), np.arange(0,1.1,0.1),':')
+
+# # xs = np.arange(-4.0,4.1,0.1)
+# # ys = np.e**(-0.5*xs**2)/(2*np.pi)**.5
+# # bins_ = xs
+
+# # plt.hist(deltas_2[:,0], density=True, bins=bins_);plt.plot(xs,ys)
+# # plt.hist(deltas_2[:,1], density=True, bins=bins_);plt.plot(xs,ys)
+# # plt.show()
+
+# # import json
+# # with open('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy_val_coco_format.json','r') as f_in:
+# #     data = json.load(f_in)
+
+# # vals = [x for x in data['annotations'] if x['image_id'] == 'frankfurt_000000_011461_leftImg8bit_foggy_beta_0.005.png']
+# # from detectron2.structures.boxes import BoxMode
+# # for val in vals:
+# #     val['bbox_mode'] = BoxMode.XYWH_ABS
+# # vals = {'annotations':vals}
+
+# # img = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/leftImg8bit/val/frankfurt/frankfurt_000000_011461_leftImg8bit_foggy_beta_0.005.png')
+# # img2 = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/gtFine/val/frankfurt/frankfurt_000000_011461_gtFine_instanceIds.png')
+# # img3 = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/gtFine/val/frankfurt/frankfurt_000000_011461_gtFine_labelIds.png')
 
 # xs = np.arange(-4.0,4.1,0.1)
 # ys = np.e**(-0.5*xs**2)/(2*np.pi)**.5
 # bins_ = xs
-
-# plt.hist(deltas_2[:,0], density=True, bins=bins_);plt.plot(xs,ys)
-# plt.hist(deltas_2[:,1], density=True, bins=bins_);plt.plot(xs,ys)
-# plt.show()
-
-# import json
-# with open('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy_val_coco_format.json','r') as f_in:
-#     data = json.load(f_in)
-
-# vals = [x for x in data['annotations'] if x['image_id'] == 'frankfurt_000000_011461_leftImg8bit_foggy_beta_0.005.png']
-# from detectron2.structures.boxes import BoxMode
-# for val in vals:
-#     val['bbox_mode'] = BoxMode.XYWH_ABS
-# vals = {'annotations':vals}
-
-# img = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/leftImg8bit/val/frankfurt/frankfurt_000000_011461_leftImg8bit_foggy_beta_0.005.png')
-# img2 = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/gtFine/val/frankfurt/frankfurt_000000_011461_gtFine_instanceIds.png')
-# img3 = 255*plt.imread('/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/gtFine/val/frankfurt/frankfurt_000000_011461_gtFine_labelIds.png')
-
-
 # fig = plt.figure()
 # axs = fig.subplots(2, 2, sharex=True, sharey=True)
-# axs[0,0].hist(deltas_2[:,0], bins=bins, density=True)
+# axs[0,0].hist(deltas_2[:,0]/stds_2[:,0], bins=bins_, density=True)
 # axs[0,0].plot(xs,ys,':')
 # axs[0,0].set_xlabel('x error')
-# axs[0,1].hist(deltas_2[:,1], bins=bins, density=True)
+# axs[0,1].hist(deltas_2[:,1]/stds_2[:,1], bins=bins_, density=True)
 # axs[0,1].plot(xs,ys,':')
 # axs[0,1].set_xlabel('y error')
-# axs[1,0].hist(deltas_2[:,2], bins=bins, density=True)
+# axs[1,0].hist(deltas_2[:,2]/stds_2[:,2], bins=bins_, density=True)
 # axs[1,0].plot(xs,ys,':')
 # axs[1,0].set_xlabel('width error')
-# axs[1,1].hist(deltas_2[:,3], bins=bins, density=True)
+# axs[1,1].hist(deltas_2[:,3]/stds_2[:,3], bins=bins_, density=True)
 # axs[1,1].plot(xs,ys,':')
 # axs[1,1].set_xlabel('height error')
-# fig.suptitle('Error Histograms')
+# fig.suptitle('Normalized Error Histograms')
 # plt.tight_layout()
+
+# # # means = deltas_2.mean(axis=0)

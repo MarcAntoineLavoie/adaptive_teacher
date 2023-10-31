@@ -119,6 +119,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         compute_val_loss=False,
         unsup=False,
         current_step=0,
+        prob_iou=False,
     ) -> Tuple[List[Instances], Dict[str, torch.Tensor]]:
 
         del images
@@ -146,7 +147,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             return proposals, losses
         else:
             pred_instances, predictions = self._forward_box(
-                features, proposals, compute_loss, compute_val_loss, branch
+                features, proposals, compute_loss, compute_val_loss, branch, prob_iou=False
             )
 
             return pred_instances, predictions
@@ -160,6 +161,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         branch: str = "",
         unsup: bool = False,
         current_step = 0,
+        prob_iou: bool = False,
     ) -> Union[Dict[str, torch.Tensor], List[Instances]]:
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
@@ -273,6 +275,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         annealing_step=0,
         bbox_cov_num_samples=1000,
         smooth_l1_beta_prob=0.0, 
+        prob_iou,
     ):
         """
         NOTE: this interface is experimental.
@@ -351,6 +354,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         self.test_topk_per_image = test_topk_per_image
 
         self.smooth_l1_beta_prob = smooth_l1_beta_prob
+        self.prob_iou = prob_iou
 
     @classmethod
     def from_config(cls,
@@ -388,6 +392,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "bbox_cov_num_samples": bbox_cov_num_samples,
             # fmt: on,
             "smooth_l1_beta_prob": cfg.MODEL.ROI_BOX_HEAD.SMOOTH_L1_BETA_PROB,
+            "prob_iou": cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU
         }
 
     def forward(self, x):
@@ -676,6 +681,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             self.test_score_thresh,
             self.test_nms_thresh,
             self.test_topk_per_image,
+            self.prob_iou,
         )
 
     def predict_boxes_for_gt_classes(self, predictions, proposals):
@@ -752,6 +758,7 @@ def prob_fast_rcnn_inference(
     score_thresh: float,
     nms_thresh: float,
     topk_per_image: int,
+    prob_iou,
 ):
     """
     Call `fast_rcnn_inference_single_image` for all images.
@@ -780,7 +787,7 @@ def prob_fast_rcnn_inference(
     """
     result_per_image = [
         prob_fast_rcnn_inference_single_image(
-            scores_per_image, boxes_per_image, score_cov_img, box_cov_img, image_shape, score_thresh, nms_thresh, topk_per_image
+            scores_per_image, boxes_per_image, score_cov_img, box_cov_img, image_shape, score_thresh, nms_thresh, topk_per_image, prob_iou=prob_iou
         )
         for scores_per_image, boxes_per_image, score_cov_img, box_cov_img, image_shape in zip(scores, boxes, score_covs, box_covs, image_shapes)
     ]
@@ -796,6 +803,7 @@ def prob_fast_rcnn_inference_single_image(
     score_thresh: float,
     nms_thresh: float,
     topk_per_image: int,
+    prob_iou,
 ):
     """
     Single-image inference. Return bounding-box detection results by thresholding
@@ -852,13 +860,31 @@ def prob_fast_rcnn_inference_single_image(
         box_covs = box_covs.view(-1,num_bbox_reg_classes, 4)
         box_covs = box_covs[filter_mask]
         result.pred_box_covs = box_covs[keep]
+        if prob_iou:
+            result.iou = intersect_self(result.pred_boxes.tensor, box_covs[keep])
+        else:
+            result.iou = -torch.ones_like(scores)
     else:
         result.pred_box_covs = -torch.ones_like(boxes)
     if not (score_covs < 0).any():
         score_covs = score_covs[filter_mask]
     else:
         result.pred_score_covs = -torch.ones_like(scores)
+
     return result, filter_inds[:, 0]
+
+def intersect_self(dt_bbox, bbox_cov):
+    bbox_dif = Box2BoxTransform((10.0, 10.0, 5.0, 5.0))
+
+    with torch.no_grad():
+        mean_IoU = torch.zeros(dt_bbox.shape[0]).cuda()
+        bbox_dist = torch.distributions.normal.Normal(torch.zeros(4).cuda(), bbox_cov**0.5)
+        sample_set = bbox_dist.sample((100,)).transpose(0,1).reshape(dt_bbox.shape[0],-1)
+        prob_bboxes = bbox_dif.apply_deltas(sample_set, dt_bbox)
+        for i in range(dt_bbox.shape[0]):
+            mean_IoU[i] = pairwise_iou(Boxes(prob_bboxes[i,:].reshape(dt_bbox.shape[0],4)), Boxes(dt_bbox[i,:].unsqueeze(0))).mean()
+
+    return mean_IoU
 
 # import matplotlib.pyplot as plt
 

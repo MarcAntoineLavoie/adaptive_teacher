@@ -1,7 +1,11 @@
 _BASE_: "./Base-RCNN-C4.yaml"
-OUTPUT_DIR: "output/test_cov"
+# OUTPUT_DIR: "output/test_cov"
 # OUTPUT_DIR: "output/test_cov2"
-# OUTPUT_DIR: "output/test_cov_temp1"
+OUTPUT_DIR: "output/test_cov_temp1"
+# OUTPUT_DIR: "output/test_prob_early"
+# OUTPUT_DIR: "output/test_prob_nll"
+# OUTPUT_DIR: "output/test_nll"
+# OUTPUT_DIR: "output/prob_nom"
 INPUT:
   CLEAN_DETECTIONS: False
   MAX_OCCLUSION: 0.5
@@ -45,6 +49,7 @@ MODEL:
         COVARIANCE_TYPE: 'diagonal' # One of the following: 'full', 'diagonal'
         NUM_SAMPLES: 1000
     ANNEALING_STEP: 10000
+    PROB_IOU: True
 SOLVER:
   LR_SCHEDULER_NAME: "WarmupTwoStageMultiStepLR"
   STEPS: (60000, 80000, 90000, 360000)
@@ -68,7 +73,7 @@ SEMISUPNET:
   BBOX_THRESHOLD: 0.8
   TEACHER_UPDATE_ITER: 1
   BURN_UP_STEP: 20000
-  # BURN_UP_STEP: 20
+  # BURN_UP_STEP: 1
   EMA_KEEP_RATE: 0.9996
   UNSUP_LOSS_WEIGHT: 1.0
   SUP_LOSS_WEIGHT: 1.0
