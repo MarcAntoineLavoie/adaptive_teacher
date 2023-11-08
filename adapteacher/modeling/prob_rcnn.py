@@ -120,6 +120,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         unsup=False,
         current_step=0,
         prob_iou=False,
+        scale=False,
     ) -> Tuple[List[Instances], Dict[str, torch.Tensor]]:
 
         del images
@@ -142,12 +143,12 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
         if (self.training and compute_loss) or compute_val_loss:
             losses, _ = self._forward_box(
-                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup, current_step=current_step
+                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup, current_step=current_step, scale=scale
             )
             return proposals, losses
         else:
             pred_instances, predictions = self._forward_box(
-                features, proposals, compute_loss, compute_val_loss, branch, prob_iou=False
+                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup, prob_iou=prob_iou
             )
 
             return pred_instances, predictions
@@ -162,6 +163,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         unsup: bool = False,
         current_step = 0,
         prob_iou: bool = False,
+        scale: bool = False
     ) -> Union[Dict[str, torch.Tensor], List[Instances]]:
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
@@ -172,7 +174,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         if (
             self.training and compute_loss
         ) or compute_val_loss:  # apply if training loss or val loss
-            losses = self.box_predictor.losses(predictions, proposals, unsup=unsup, current_step=current_step)
+            losses = self.box_predictor.losses(predictions, proposals, unsup=unsup, current_step=current_step, scale=scale)
 
             if self.train_on_pred_boxes:
                 with torch.no_grad():
@@ -185,7 +187,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
                         proposals_per_image.proposal_boxes = Boxes(pred_boxes_per_image)
             return losses, predictions
         else:
-            pred_instances, ids_ = self.box_predictor.inference(predictions, proposals)
+            pred_instances, ids_ = self.box_predictor.inference(predictions, proposals, unsup=unsup)
             for instance, proposal, ids in zip(pred_instances, proposals, ids_):
                 instance.rpn_score = proposal.objectness_logits[ids]
             return pred_instances, predictions
@@ -425,7 +427,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
         return scores, proposal_deltas, score_vars, proposal_covs
 
-    def losses(self, predictions, proposals, current_step=0, unsup=False):
+    def losses(self, predictions, proposals, current_step=0, unsup=False, scale=False):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -467,6 +469,10 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                     dtype=torch.long,
                     device=pred_class_logits.device),
                 reduction="sum",)
+        elif unsup and scale:
+            loss_cls = F.cross_entropy(
+                pred_class_logits, gt_classes, reduction="mean")
+
         else:
             loss_cls = F.cross_entropy(
                 pred_class_logits, gt_classes, reduction="mean")
@@ -639,6 +645,15 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
                 loss_box_reg = (1.0 - probabilistic_loss_weight) * \
                     standard_regression_loss + probabilistic_loss_weight * loss_box_reg
+            
+            elif unsup:
+                loss_box_reg = smooth_l1_loss(pred_proposal_deltas,
+                                              gt_proposals_delta,
+                                              self.smooth_l1_beta,
+                                              reduction="sum",)
+                loss_box_reg = loss_box_reg / loss_reg_normalizer
+
+            
             else:
                 loss_box_reg = smooth_l1_loss(pred_proposal_deltas,
                                               gt_proposals_delta,
