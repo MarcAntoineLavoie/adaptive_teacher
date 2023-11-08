@@ -892,12 +892,13 @@ def intersect_self(dt_bbox, bbox_cov):
     bbox_dif = Box2BoxTransform((10.0, 10.0, 5.0, 5.0))
 
     with torch.no_grad():
+        n = 100
         mean_IoU = torch.zeros(dt_bbox.shape[0]).cuda()
         bbox_dist = torch.distributions.normal.Normal(torch.zeros(4).cuda(), bbox_cov**0.5)
-        sample_set = bbox_dist.sample((100,)).transpose(0,1).reshape(dt_bbox.shape[0],-1)
+        sample_set = bbox_dist.sample((n,)).transpose(0,1).reshape(dt_bbox.shape[0],-1)
         prob_bboxes = bbox_dif.apply_deltas(sample_set, dt_bbox)
         for i in range(dt_bbox.shape[0]):
-            mean_IoU[i] = pairwise_iou(Boxes(prob_bboxes[i,:].reshape(dt_bbox.shape[0],4)), Boxes(dt_bbox[i,:].unsqueeze(0))).mean()
+            mean_IoU[i] = pairwise_iou(Boxes(prob_bboxes[i,:].reshape(n,4)), Boxes(dt_bbox[i,:].unsqueeze(0))).mean()
 
     return mean_IoU
 
