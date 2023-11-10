@@ -358,6 +358,7 @@ class ATeacherTrainer(DefaultTrainer):
         # self.register_hooks(self.build_hooks_final())
 
         self.prob_iou = cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU
+        self.select_iou = cfg.MODEL.PROBABILISTIC_MODELING.SELECT_IOU
 
     def resume_or_load(self, resume=True):
         """
@@ -484,7 +485,9 @@ class ATeacherTrainer(DefaultTrainer):
             # add boxes to instances
             new_proposal_inst.gt_boxes = new_boxes
             new_proposal_inst.gt_classes = proposal_bbox_inst.pred_classes[valid_map]
-            new_proposal_inst.scores = proposal_bbox_inst.scores[valid_map]
+            new_proposal_inst.gt_scores = proposal_bbox_inst.scores[valid_map]
+            if 'iou' in proposal_bbox_inst._fields.keys():
+                new_proposal_inst.gt_iou = proposal_bbox_inst.iou[valid_map]
 
         return new_proposal_inst
     
@@ -502,7 +505,9 @@ class ATeacherTrainer(DefaultTrainer):
         # add boxes to instances
         new_proposal_inst.gt_boxes = new_boxes
         new_proposal_inst.gt_classes = proposal_bbox_inst.pred_classes[valid_map]
-        new_proposal_inst.scores = proposal_bbox_inst.scores[valid_map]
+        new_proposal_inst.gt_scores = proposal_bbox_inst.scores[valid_map]
+        if 'iou' in proposal_bbox_inst._fields.keys():
+            new_proposal_inst.gt_iou = proposal_bbox_inst.iou[valid_map]
 
         return new_proposal_inst
 
@@ -513,7 +518,7 @@ class ATeacherTrainer(DefaultTrainer):
         num_proposal_output = 0.0
         for proposal_bbox_inst in proposals_rpn_unsup_k:
             # thresholding
-            if self.prob_iou:
+            if self.select_iou:
                 if proposal_type == 'roih':
                     proposal_bbox_inst = self.threshold_self(proposal_bbox_inst, thres=cur_threshold,)
                 else:

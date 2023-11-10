@@ -120,7 +120,6 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         unsup=False,
         current_step=0,
         prob_iou=False,
-        scale=False,
     ) -> Tuple[List[Instances], Dict[str, torch.Tensor]]:
 
         del images
@@ -143,7 +142,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
         if (self.training and compute_loss) or compute_val_loss:
             losses, _ = self._forward_box(
-                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup, current_step=current_step, scale=scale
+                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup, current_step=current_step
             )
             return proposals, losses
         else:
@@ -163,7 +162,6 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         unsup: bool = False,
         current_step = 0,
         prob_iou: bool = False,
-        scale: bool = False
     ) -> Union[Dict[str, torch.Tensor], List[Instances]]:
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
@@ -174,7 +172,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         if (
             self.training and compute_loss
         ) or compute_val_loss:  # apply if training loss or val loss
-            losses = self.box_predictor.losses(predictions, proposals, unsup=unsup, current_step=current_step, scale=scale)
+            losses = self.box_predictor.losses(predictions, proposals, unsup=unsup, current_step=current_step)
 
             if self.train_on_pred_boxes:
                 with torch.no_grad():
@@ -223,7 +221,14 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
                     if trg_name.startswith("gt_") and not proposals_per_image.has(
                         trg_name
                     ):
-                        proposals_per_image.set(trg_name, trg_value[sampled_targets])
+                        if trg_name in ["gt_iou", "gt_scores"]:
+                            ids_bg = torch.where(gt_classes == 8)[0]
+                            vals = trg_value[sampled_targets]
+                            vals[ids_bg] = 1.0
+                            proposals_per_image.set(trg_name, vals)
+                        else:
+                            proposals_per_image.set(trg_name, trg_value[sampled_targets])
+
             else:
                 gt_boxes = Boxes(
                     targets_per_image.gt_boxes.tensor.new_zeros((len(sampled_idxs), 4))
@@ -277,7 +282,10 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         annealing_step=0,
         bbox_cov_num_samples=1000,
         smooth_l1_beta_prob=0.0, 
-        prob_iou,
+        prob_iou=False,
+        use_scale=False,
+        scale_expo_score=0.0,
+        scale_expo_iou=0.0,
     ):
         """
         NOTE: this interface is experimental.
@@ -357,6 +365,9 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
         self.smooth_l1_beta_prob = smooth_l1_beta_prob
         self.prob_iou = prob_iou
+        self.use_scale = use_scale
+        self.scale_expo_score = scale_expo_score
+        self.scale_expo_iou = scale_expo_iou
 
     @classmethod
     def from_config(cls,
@@ -394,7 +405,10 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "bbox_cov_num_samples": bbox_cov_num_samples,
             # fmt: on,
             "smooth_l1_beta_prob": cfg.MODEL.ROI_BOX_HEAD.SMOOTH_L1_BETA_PROB,
-            "prob_iou": cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU
+            "prob_iou": cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU,
+            "use_scale": cfg.MODEL.PROBABILISTIC_MODELING.SCALE_LOSS,
+            "scale_expo_score": cfg.MODEL.PROBABILISTIC_MODELING.SCALE_EXPO_SCORE,
+            "scale_expo_iou": cfg.MODEL.PROBABILISTIC_MODELING.SCALE_EXPO_IOU,
         }
 
     def forward(self, x):
@@ -427,7 +441,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
         return scores, proposal_deltas, score_vars, proposal_covs
 
-    def losses(self, predictions, proposals, current_step=0, unsup=False, scale=False):
+    def losses(self, predictions, proposals, current_step=0, unsup=False):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -469,9 +483,12 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                     dtype=torch.long,
                     device=pred_class_logits.device),
                 reduction="sum",)
-        elif unsup and scale:
-            loss_cls = F.cross_entropy(
-                pred_class_logits, gt_classes, reduction="mean")
+        elif unsup and self.use_scale and "gt_scores" in proposals[0]._fields.keys():
+            loss_temp = F.cross_entropy(
+                pred_class_logits, gt_classes, reduction="none")
+            gt_scores = cat([p.gt_scores for p in proposals], dim=0) ** self.scale_expo_score
+            weights_score = gt_scores.shape[0] / gt_scores.sum() * gt_scores
+            loss_cls = (loss_temp*weights_score).mean()
 
         else:
             loss_cls = F.cross_entropy(
@@ -646,13 +663,14 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                 loss_box_reg = (1.0 - probabilistic_loss_weight) * \
                     standard_regression_loss + probabilistic_loss_weight * loss_box_reg
             
-            elif unsup:
-                loss_box_reg = smooth_l1_loss(pred_proposal_deltas,
+            elif unsup and self.use_scale and "gt_iou" in proposals[0]._fields.keys():
+                loss_box_temp = smooth_l1_loss(pred_proposal_deltas,
                                               gt_proposals_delta,
                                               self.smooth_l1_beta,
-                                              reduction="sum",)
-                loss_box_reg = loss_box_reg / loss_reg_normalizer
-
+                                              reduction="none",).sum(dim=1)
+                gt_ious = cat([p.gt_iou for p in proposals], dim=0)[fg_inds] ** self.scale_expo_iou
+                weights_iou = gt_ious.shape[0] / gt_ious.sum() * gt_ious
+                loss_box_reg = (loss_box_temp*weights_iou).sum() / loss_reg_normalizer
             
             else:
                 loss_box_reg = smooth_l1_loss(pred_proposal_deltas,
@@ -875,7 +893,7 @@ def prob_fast_rcnn_inference_single_image(
         box_covs = box_covs.view(-1,num_bbox_reg_classes, 4)
         box_covs = box_covs[filter_mask]
         result.pred_box_covs = box_covs[keep]
-        if prob_iou:
+        if prob_iou and keep.shape[0]:
             result.iou = intersect_self(result.pred_boxes.tensor, box_covs[keep])
         else:
             result.iou = -torch.ones_like(scores)
