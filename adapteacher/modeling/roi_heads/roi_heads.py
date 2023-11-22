@@ -148,7 +148,8 @@ class StandardROIHeadsPseudoLab(StandardROIHeads):
                 unsup = 1
             else:
                 unsup = 0
-            pred_instances, _ = self.box_predictor.inference(predictions, proposals, unsup=unsup)
+            # pred_instances, _ = self.box_predictor.inference(predictions, proposals, unsup=unsup)
+            pred_instances, _ = self.box_predictor.inference(predictions, proposals)
             return pred_instances, predictions
 
     @torch.no_grad()

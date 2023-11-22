@@ -353,8 +353,8 @@ class ATeacherTrainer(DefaultTrainer):
 
         self.probe = OpenMatchTrainerProbe(cfg) 
         
-        self.register_hooks(self.build_hooks())
         self.register_hooks(self.build_hooks_final())
+        self.register_hooks(self.build_hooks())
         # self.register_hooks(self.build_hooks_final())
 
         self.prob_iou = cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU
@@ -1000,12 +1000,12 @@ class ATeacherTrainer(DefaultTrainer):
         datasets_val = ['cityscapes_val', 'cityscapes_foggy_val']
 
         cfg = self.cfg.clone()
-        cfg.defrost()
-        cfg.INPUT.MIN_SIZE_TRAIN = (1024,)
-        cfg.INPUT.MIN_SIZE_TEST = (1024,)
-        cfg.INPUT.MAX_SIZE_TRAIN = (2048,)
-        cfg.INPUT.MAX_SIZE_TEST = (2048,)
-        cfg.INPUT.RANDOM_FLIP = "none"
+        # cfg.defrost()
+        # cfg.INPUT.MIN_SIZE_TRAIN = (1024,)
+        # cfg.INPUT.MIN_SIZE_TEST = (1024,)
+        # cfg.INPUT.MAX_SIZE_TRAIN = (2048,)
+        # cfg.INPUT.MAX_SIZE_TEST = (2048,)
+        # cfg.INPUT.RANDOM_FLIP = "none"
 
 
         # Test weak aug and generate pseudo labels
@@ -1080,6 +1080,13 @@ class ATeacherTrainer(DefaultTrainer):
 
         if len(results) == 1:
             results = list(results.values())[0]
+
+        outfile = 'results.json'
+        import os
+        file_out = '/'.join([os.getcwd(),self.cfg.OUTPUT_DIR,outfile])
+        with open(file_out, 'w') as f_out:
+            json.dump(results, f_out)
+
         return results
 
 
@@ -1421,3 +1428,84 @@ def inference_context(model):
 #     plt.tight_layout()
 #     plt.show()
 
+
+
+# import matplotlib.pyplot as plt
+
+# dict_class = dict([(x.split('-')[1], []) for x in results['cityscapes_val']['bbox'].keys() if '-' in x])
+# run_order = []
+# # labels = list(dict_class.keys())
+# for run in results.keys():
+#     run_order.append(run)
+#     for label in results[run]['bbox'].keys():
+#         if '-' in label:
+#             curr_class = label.split('-')[1]
+#             dict_class[curr_class].append(results[run]['bbox'][label])
+
+# vals = np.array(list(dict_class.values()))
+# order = [3,4,0,1,2]
+# order2 = np.argsort(list(dict_class.keys()))
+# vals = vals[:,order]
+# vals = vals[order2,:]
+# class_labels = [list(dict_class.keys())[x] for x in [7, 4, 2, 6, 0, 1, 5, 3]]
+# run_labels = [run_order[x] for x in order]
+
+# N = len(dict_class)
+# ind = np.arange(N) 
+# width = 1/(len(order)+2)
+# plt.figure()
+# for i in range(len(order)):
+#     plt.bar(ind+width*i, vals[:,i], width)
+  
+# plt.xlabel("Class")
+# plt.ylabel('Score')
+# plt.xticks(ind+2*width, class_labels)
+# plt.legend(run_labels)
+# plt.tight_layout()
+
+# file_in = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/output/at_scaled/metrics.json'
+# with open(file_in, 'r') as f_in:
+#     temp = json.load(f_in)
+
+# old_vals = np.zeros((8,5))
+# order_old = [4,3,2,1,0]
+# i = 0
+# j = -1
+# old_key = None
+# for key in temp.keys():
+#     if key[0] == 'c' and '-' in key:
+#         curr_key = key.split('/')[0]
+#         if old_key != curr_key:
+#             old_key = curr_key
+#             j += 1
+#             i = 0
+#         old_vals[i,j] = temp[key]
+#         i += 1
+
+# old_vals = old_vals[:,order_old]
+
+# N = len(dict_class)
+# ind = np.arange(N) 
+# width = 1/(len(order)+2)
+# plt.figure()
+# for i in range(len(order)):
+#     plt.bar(ind+width*i, old_vals[:,i], width)
+  
+# plt.xlabel("Class")
+# plt.ylabel('Score')
+# plt.xticks(ind+2*width, class_labels)
+# plt.legend(run_labels)
+# plt.tight_layout()
+
+# N = len(dict_class)
+# ind = np.arange(N) 
+# width = 1/(len(order)+2)
+# plt.figure()
+# for i in range(len(order)):
+#     plt.bar(ind+width*i, vals[:,i] - old_vals[:,i], width)
+  
+# plt.xlabel("Class")
+# plt.ylabel('Score')
+# plt.xticks(ind+2*width, class_labels)
+# plt.legend(run_labels)
+# plt.tight_layout()

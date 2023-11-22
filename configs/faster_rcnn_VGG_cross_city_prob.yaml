@@ -1,17 +1,21 @@
 _BASE_: "./Base-RCNN-C4.yaml"
 # OUTPUT_DIR: "output/test_cov"
-# OUTPUT_DIR: "output/test_cov2"
-OUTPUT_DIR: "output/test_cov_temp1"
+OUTPUT_DIR: "output/test_cov2"
+# OUTPUT_DIR: "output/test_cov_temp1"
 # OUTPUT_DIR: "output/test_prob_early"
 # OUTPUT_DIR: "output/test_prob_nll"
 # OUTPUT_DIR: "output/test_nll"
-# OUTPUT_DIR: "output/prob_nom"
+# OUTPUT_DIR: "output/test_iou_select_080"
+# OUTPUT_DIR: "output/at_scaled"
 INPUT:
   CLEAN_DETECTIONS: False
   MAX_OCCLUSION: 0.5
+  CROP:
+    ENABLED: True
 MODEL:
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
   META_ARCHITECTURE: "ProbDATwoStagePseudoLabGeneralizedRCNN"
+  # META_ARCHITECTURE: "DAobjTwoStagePseudoLabGeneralizedRCNN"
   BACKBONE:
     NAME: "build_vgg_backbone"
   MASK_ON: False
@@ -77,15 +81,15 @@ SEMISUPNET:
   BBOX_THRESHOLD: 0.8
   # BBOX_THRESHOLD: 0.15
   TEACHER_UPDATE_ITER: 1
-  # BURN_UP_STEP: 20000
-  BURN_UP_STEP: 1
+  BURN_UP_STEP: 20000
+  # BURN_UP_STEP: 1
   EMA_KEEP_RATE: 0.9996
   UNSUP_LOSS_WEIGHT: 1.0
   SUP_LOSS_WEIGHT: 1.0
   DIS_TYPE: "vgg4" #["concate","p2","multi"]
 TEST:
-  # EVAL_PERIOD: 1000
-  EVAL_PERIOD: 4
+  EVAL_PERIOD: 2500
+  # EVAL_PERIOD: 10
 # INPUT:
 #   MIN_SIZE_TRAIN: (450,)
 
