@@ -12,6 +12,7 @@ INPUT:
   MAX_OCCLUSION: 0.5
   CROP:
     ENABLED: True
+  MIN_SIZE_TRAIN: (568,)
 MODEL:
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
   META_ARCHITECTURE: "ProbDATwoStagePseudoLabGeneralizedRCNN"
@@ -90,7 +91,6 @@ SEMISUPNET:
 TEST:
   EVAL_PERIOD: 2500
   # EVAL_PERIOD: 10
-# INPUT:
-#   MIN_SIZE_TRAIN: (450,)
+
 
 
