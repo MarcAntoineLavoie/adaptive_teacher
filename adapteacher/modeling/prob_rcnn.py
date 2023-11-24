@@ -483,7 +483,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                     dtype=torch.long,
                     device=pred_class_logits.device),
                 reduction="sum",)
-        elif unsup and self.use_scale and "gt_scores" in proposals[0]._fields.keys():
+        elif unsup and self.use_scale and all(["gt_scores" in props._fields.keys() for props in proposals]):
             loss_temp = F.cross_entropy(
                 pred_class_logits, gt_classes, reduction="none")
             gt_scores = cat([p.gt_scores for p in proposals], dim=0) ** self.scale_expo_score
