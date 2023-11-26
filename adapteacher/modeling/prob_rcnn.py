@@ -662,8 +662,8 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
                 loss_box_reg = (1.0 - probabilistic_loss_weight) * \
                     standard_regression_loss + probabilistic_loss_weight * loss_box_reg
-            
-            elif unsup and self.use_scale and "gt_iou" in proposals[0]._fields.keys():
+
+            elif unsup and self.use_scale and all(["gt_iou" in props._fields.keys() for props in proposals]):
                 loss_box_temp = smooth_l1_loss(pred_proposal_deltas,
                                               gt_proposals_delta,
                                               self.smooth_l1_beta,
