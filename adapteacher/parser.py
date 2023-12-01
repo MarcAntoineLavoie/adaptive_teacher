@@ -77,3 +77,126 @@ plt.figure();plt.plot((ap_splits/ap_splits[0,:]).T);plt.legend(datasets)
 plt.show()
 
 
+import matplotlib.pyplot as plt
+import json
+import numpy as np
+
+# file_in = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/output/test_iou_select_080/results_big.json'
+file_in = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/output/test_v2_iou70/results.json'
+tf_in = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/output/test_v2_iou70/tf_out.json'
+with open(file_in, 'r') as f_in:
+    results = json.load(f_in)
+
+# with open(tf_in, 'r') as f_in:
+#     results_tf1 = json.load(f_in)
+
+dict_class = dict([(x.split('-')[1], []) for x in results['cityscapes_val']['bbox'].keys() if '-' in x])
+run_order = []
+# labels = list(dict_class.keys())
+for run in results.keys():
+    run_order.append(run)
+    for label in results[run]['bbox'].keys():
+        if '-' in label:
+            curr_class = label.split('-')[1]
+            dict_class[curr_class].append(results[run]['bbox'][label])
+
+vals = np.array(list(dict_class.values()))
+order = [3,4,0,1,2]
+order2 = np.argsort(list(dict_class.keys()))
+vals = vals[:,order]
+vals = vals[order2,:]
+class_labels = [list(dict_class.keys())[x] for x in [7, 4, 2, 6, 0, 1, 5, 3]]
+run_labels = [run_order[x] for x in order]
+
+N = len(dict_class)
+ind = np.arange(N) 
+width = 1/(len(order)+2)
+plt.figure()
+for i in range(len(order)):
+    plt.bar(ind+width*i, vals[:,i], width)
+  
+plt.xlabel("Class")
+plt.ylabel('Score')
+plt.xticks(ind+2*width, class_labels)
+plt.legend(run_labels)
+plt.title("AP50 New")
+plt.tight_layout()
+
+# file_in = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/output/at_scaled/metrics.json'
+# file_in = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/output/at_scaled/results.json'
+file_in = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/output/test_v2_nom/results.json'
+tf_in = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/output/test_v2_nom/tf_out.json'
+with open(file_in, 'r') as f_in:
+    temp = json.load(f_in)
+
+# with open(tf_in, 'r') as f_in:
+#     results_tf2 = json.load(f_in)
+
+# old_vals = np.zeros((8,5))
+# order_old = [4,3,2,1,0]
+# i = 0
+# j = -1
+# old_key = None
+# for key in temp.keys():
+#     if key[0] == 'c' and '-' in key:
+#         curr_key = key.split('/')[0]
+#         if old_key != curr_key:
+#             old_key = curr_key
+#             j += 1
+#             i = 0
+#         old_vals[i,j] = temp[key]
+#         i += 1
+
+# old_vals = old_vals[:,order_old]
+
+# file_in = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/output/at_scaled/results.json'
+# with open(file_in, 'r') as f_in:
+#     temp = json.load(f_in)
+
+dict_class = dict([(x.split('-')[1], []) for x in temp['cityscapes_val']['bbox'].keys() if '-' in x])
+run_order = []
+# labels = list(dict_class.keys())
+for run in temp.keys():
+    run_order.append(run)
+    for label in temp[run]['bbox'].keys():
+        if '-' in label:
+            curr_class = label.split('-')[1]
+            dict_class[curr_class].append(temp[run]['bbox'][label])
+
+old_vals = np.array(list(dict_class.values()))
+order = [3,4,0,1,2]
+order2 = np.argsort(list(dict_class.keys()))
+old_vals = old_vals[:,order]
+old_vals = old_vals[order2,:]
+class_labels = [list(dict_class.keys())[x] for x in [7, 4, 2, 6, 0, 1, 5, 3]]
+run_labels = [run_order[x] for x in order]
+
+N = len(dict_class)
+ind = np.arange(N) 
+width = 1/(len(order)+2)
+plt.figure()
+for i in range(len(order)):
+    plt.bar(ind+width*i, old_vals[:,i], width)
+  
+plt.xlabel("Class")
+plt.ylabel('Score')
+plt.xticks(ind+2*width, class_labels)
+plt.legend(run_labels)
+plt.title("AP50 Baseline")
+plt.tight_layout()
+
+N = len(dict_class)
+ind = np.arange(N) 
+width = 1/(len(order)+2)
+plt.figure()
+for i in range(len(order)):
+    plt.bar(ind+width*i, vals[:,i] - old_vals[:,i], width)
+  
+plt.xlabel("Class")
+plt.ylabel('Score')
+plt.xticks(ind+2*width, class_labels)
+plt.legend(run_labels)
+plt.title("AP50 New - Baseline")
+plt.tight_layout()
+
+a = 1

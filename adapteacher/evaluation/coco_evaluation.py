@@ -645,6 +645,8 @@ def _evaluate_predictions_on_coco(
         for c in coco_results:
             c.pop("bbox", None)
 
+    # use_fast_impl = False
+
     coco_dt = coco_gt.loadRes(coco_results)
     if use_prob:
         coco_eval = prob_COCOeval(coco_gt, coco_dt, iou_type)

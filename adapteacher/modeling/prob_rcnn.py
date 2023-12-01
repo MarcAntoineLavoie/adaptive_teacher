@@ -31,6 +31,7 @@ from detectron2.modeling.matcher import Matcher
 
 from detectron2.layers import ShapeSpec, batched_nms, cat, cross_entropy, nonzero_tuple
 
+from adapteacher.modeling.meta_arch.rcnn import FCDiscriminator_inst, grad_reverse
 
 @ROI_HEADS_REGISTRY.register()
 class ProbROIHeadsPseudoLab(StandardROIHeads):
@@ -169,6 +170,9 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         predictions = self.box_predictor(box_features)
         del box_features
 
+        if self.align_proposals:
+            self.keep_proposals = dict((branch,predictions))
+
         if (
             self.training and compute_loss
         ) or compute_val_loss:  # apply if training loss or val loss
@@ -286,6 +290,8 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         use_scale=False,
         scale_expo_score=0.0,
         scale_expo_iou=0.0,
+        domain_invariant_inst=0.0,
+        align_proposals=False,
     ):
         """
         NOTE: this interface is experimental.
@@ -369,6 +375,11 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         self.scale_expo_score = scale_expo_score
         self.scale_expo_iou = scale_expo_iou
 
+        self.domain_invariant_inst = domain_invariant_inst
+        if self.domain_invariant_inst:
+            self.DA_layer = FCDiscriminator_inst(input_shape.channels)
+            self.DA_scores = []
+
     @classmethod
     def from_config(cls,
                     cfg,
@@ -409,6 +420,9 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "use_scale": cfg.MODEL.PROBABILISTIC_MODELING.SCALE_LOSS,
             "scale_expo_score": cfg.MODEL.PROBABILISTIC_MODELING.SCALE_EXPO_SCORE,
             "scale_expo_iou": cfg.MODEL.PROBABILISTIC_MODELING.SCALE_EXPO_IOU,
+            "domain_invariant_inst": cfg.SEMISUPNET.DOMAIN_ADV_INST,
+            "align_proposals": cfg.SEMISUPNET.ALIGN_PROPOSALS
+            # "domain_invariant_inst": 0,
         }
 
     def forward(self, x):
@@ -439,9 +453,13 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         else:
             proposal_covs = None
 
+        if self.domain_invariant_inst:
+            x_rev = grad_reverse(x)
+            self.DA_scores = self.DA_layer(x_rev)
+
         return scores, proposal_deltas, score_vars, proposal_covs
 
-    def losses(self, predictions, proposals, current_step=0, unsup=False):
+    def losses(self, predictions, proposals, current_step=0, unsup=False, DA_label=0):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -679,7 +697,19 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                                               reduction="sum",)
                 loss_box_reg = loss_box_reg / loss_reg_normalizer
 
-        return {"loss_cls": loss_cls, "loss_box_reg": loss_box_reg}
+        if self.domain_invariant_inst:
+            use_only_fg = False
+            if use_only_fg:
+                n = pred_class_logits.shape[1] -1
+                fg_idx = gt_classes < n
+                # logit_thresh = pred_class_logits.gather(1, gt_classes.unsqueeze(1)) > 0.7
+                self.DA_scores = self.DA_scores[fg_idx]
+            loss_DA_inst = self.domain_invariant_inst * F.binary_cross_entropy_with_logits(self.DA_scores, torch.FloatTensor(self.DA_scores.data.size()).fill_(DA_label).to(self.DA_scores.device))
+
+            losses = {"loss_cls": loss_cls, "loss_box_reg": loss_box_reg, "loss_DA_inst": loss_DA_inst}
+        else:
+            losses = {"loss_cls": loss_cls, "loss_box_reg": loss_box_reg}
+        return losses 
 
     def inference(self, predictions, proposals, unsup=0):
         """

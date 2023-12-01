@@ -19,6 +19,7 @@ import adapteacher.data.datasets.builtin
 from adapteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
 
 from math import floor 
+import os
 
 def setup(args):
     """
@@ -27,7 +28,14 @@ def setup(args):
     cfg = get_cfg()
     cfg.set_new_allowed(True)
     add_ateacher_config(cfg)
-    cfg.merge_from_file(args.config_file)
+    if args.use_old_cfg and os.path.isfile('/'.join([os.getcwd(),args.output_dir,'config.yaml'])):
+        cfg.merge_from_file('/'.join([args.output_dir,'config.yaml']))
+        cfg.OUTPUT_DIR = args.output_dir
+        cfg.SOLVER.IMG_PER_BATCH_LABEL = 2
+        cfg.SOLVER.IMG_PER_BATCH_UNLABEL = 2
+        cfg.TEST.EVAL_PERIOD = 20
+    else:
+        cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     # cfg = scale_configs(cfg)
     cfg['DATALOADER']['NUM_WORKERS'] = 8
@@ -112,10 +120,13 @@ if __name__ == "__main__":
     # args.resume = False
     args.resume = True
 
-    # args.output_dir = './output/at_scaled'
     # args.OUTPUT_DIR = './output/temp1'
 
     # args.eval_only = True
+
+    # args.output_dir = 'output/test_v2_iou70_test'
+    # args.use_old_cfg = True
+    args.use_old_cfg = False
 
     print("Command Line Args:", args)
     launch(

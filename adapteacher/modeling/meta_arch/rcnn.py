@@ -43,6 +43,26 @@ class FCDiscriminator_img(nn.Module):
         return x
 #################################
 
+############### Instance discriminator ##############
+class FCDiscriminator_inst(nn.Module):
+    def __init__(self, num_classes, ndf1=256, ndf2=128):
+        super(FCDiscriminator_inst, self).__init__()
+
+        self.lin1 = nn.Linear(num_classes, ndf1)
+        self.lin2 = nn.Linear(ndf1, ndf2)
+        self.classifier = nn.Linear(ndf2, 1)
+
+        self.leaky_relu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
+
+    def forward(self, x):
+        x = self.lin1(x)
+        x = self.leaky_relu(x)
+        x = self.lin2(x)
+        x = self.leaky_relu(x)
+        x = self.classifier(x)
+        return x
+#################################
+
 ################ Gradient reverse function
 class GradReverse(torch.autograd.Function):
     @staticmethod
@@ -73,6 +93,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         input_format: Optional[str] = None,
         vis_period: int = 0,
         dis_type: str,
+        align_proposals: bool,
         # dis_loss_weight: float = 0,
     ):
         """
@@ -109,6 +130,13 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         # self.D_img = None
         self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]) # Need to know the channel
         # self.bceLoss_func = nn.BCEWithLogitsLoss()
+
+
+        if align_proposals:
+            self.roi_heads.align_proposals = True
+        else:
+            self.roi_heads.align_proposals = False
+
     def build_discriminator(self):
         self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]).to(self.device) # Need to know the channel
 
@@ -125,6 +153,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             "pixel_std": cfg.MODEL.PIXEL_STD,
             "dis_type": cfg.SEMISUPNET.DIS_TYPE,
             # "dis_loss_ratio": cfg.xxx,
+            "align_proposals": cfg.SEMISUPNET.ALIGN_PROPOSALS,
         }
 
     def preprocess_image_train(self, batched_inputs: List[Dict[str, torch.Tensor]]):
@@ -175,35 +204,38 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         target_label = 1
 
         if branch == "domain":
-            # self.D_img.train()
-            # source_label = 0
-            # target_label = 1
-            # images = self.preprocess_image(batched_inputs)
-            images_s, images_t = self.preprocess_image_train(batched_inputs)
+            if 0:
+                pass
+            else:
+                # self.D_img.train()
+                # source_label = 0
+                # target_label = 1
+                # images = self.preprocess_image(batched_inputs)
+                images_s, images_t = self.preprocess_image_train(batched_inputs)
 
-            features = self.backbone(images_s.tensor)
+                features = self.backbone(images_s.tensor)
 
-            # import pdb
-            # pdb.set_trace()
-           
-            features_s = grad_reverse(features[self.dis_type])
-            D_img_out_s = self.D_img(features_s)
-            loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
-
-            features_t = self.backbone(images_t.tensor)
+                # import pdb
+                # pdb.set_trace()
             
-            features_t = grad_reverse(features_t[self.dis_type])
-            # features_t = grad_reverse(features_t['p2'])
-            D_img_out_t = self.D_img(features_t)
-            loss_D_img_t = F.binary_cross_entropy_with_logits(D_img_out_t, torch.FloatTensor(D_img_out_t.data.size()).fill_(target_label).to(self.device))
+                features_s = grad_reverse(features[self.dis_type])
+                D_img_out_s = self.D_img(features_s)
+                loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
 
-            # import pdb
-            # pdb.set_trace()
+                features_t = self.backbone(images_t.tensor)
+                
+                features_t = grad_reverse(features_t[self.dis_type])
+                # features_t = grad_reverse(features_t['p2'])
+                D_img_out_t = self.D_img(features_t)
+                loss_D_img_t = F.binary_cross_entropy_with_logits(D_img_out_t, torch.FloatTensor(D_img_out_t.data.size()).fill_(target_label).to(self.device))
 
-            losses = {}
-            losses["loss_D_img_s"] = loss_D_img_s
-            losses["loss_D_img_t"] = loss_D_img_t
-            return losses, [], [], None
+                # import pdb
+                # pdb.set_trace()
+
+                losses = {}
+                losses["loss_D_img_s"] = loss_D_img_s
+                losses["loss_D_img_t"] = loss_D_img_t
+                return losses, [], [], None
 
         # self.D_img.eval()
         images = self.preprocess_image(batched_inputs)

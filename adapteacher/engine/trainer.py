@@ -353,12 +353,15 @@ class ATeacherTrainer(DefaultTrainer):
 
         self.probe = OpenMatchTrainerProbe(cfg) 
         
-        self.register_hooks(self.build_hooks_final())
-        self.register_hooks(self.build_hooks())
         # self.register_hooks(self.build_hooks_final())
+        self.register_hooks(self.build_hooks())
+        self.register_hooks(self.build_hooks_final())
 
         self.prob_iou = cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU
         self.select_iou = cfg.MODEL.PROBABILISTIC_MODELING.SELECT_IOU
+        self.align_proposals = cfg.SEMISUPNET.ALIGN_PROPOSALS
+        self.model.roi_heads.align_proposals = self.align_proposals
+        self.model_teacher.roi_heads.align_proposals = self.align_proposals
 
     def resume_or_load(self, resume=True):
         """
@@ -492,7 +495,7 @@ class ATeacherTrainer(DefaultTrainer):
         return new_proposal_inst
     
     def threshold_self(self, proposal_bbox_inst, thres=0.7):
-        valid_map = proposal_bbox_inst.iou > thres
+        valid_map = (proposal_bbox_inst.iou > thres) * (proposal_bbox_inst.rpn_score > 0.3)
 
         # create instances containing boxes and gt_classes
         image_shape = proposal_bbox_inst.image_size
@@ -680,6 +683,9 @@ class ATeacherTrainer(DefaultTrainer):
             )
             record_dict.update(record_all_label_data)
 
+            if self.align_proposals:
+                proposals_s = self.model.roi_heads.keep_proposals["supervised"]
+
             # 5. input strongly augmented unlabeled data into model
             record_all_unlabel_data, _, _, _ = self.model(
                 all_unlabel_data, branch="supervised_target"
@@ -690,6 +696,9 @@ class ATeacherTrainer(DefaultTrainer):
                     key
                 ]
             record_dict.update(new_record_all_unlabel_data)
+
+            if self.align_proposals:
+                proposals_t = self.model.roi_heads.keep_proposals["supervised_target"]
 
             # 6. input weakly labeled data (source) and weakly unlabeled data (target) to student model
             # give sign to the target data
@@ -1000,19 +1009,20 @@ class ATeacherTrainer(DefaultTrainer):
         datasets_val = ['cityscapes_val', 'cityscapes_foggy_val']
 
         cfg = self.cfg.clone()
-        # cfg.defrost()
+        cfg.defrost()
         # cfg.INPUT.MIN_SIZE_TRAIN = (1024,)
         # cfg.INPUT.MIN_SIZE_TEST = (1024,)
         # cfg.INPUT.MAX_SIZE_TRAIN = (2048,)
         # cfg.INPUT.MAX_SIZE_TEST = (2048,)
         # cfg.INPUT.RANDOM_FLIP = "none"
+        cfg.INPUT.CROP.ENABLED = False
 
 
         # Test weak aug and generate pseudo labels
         mapper = DatasetMapperWithWeakAugs(cfg, True)
         data_loader = build_detection_unlabel_train_loader(cfg, mapper=mapper)
         evaluator = self.build_evaluator(cfg, 'cityscapes_foggy_train')
-
+        print('Running on cityscapes_foggy_train weak')
         results_i = self.inference_and_pseudo_label(self.model_teacher, data_loader, evaluator)
         results['cityscapes_foggy_train_weak'] = results_i
         if comm.is_main_process():
@@ -1031,6 +1041,7 @@ class ATeacherTrainer(DefaultTrainer):
         evaluator = self.build_evaluator(self.cfg, 'cityscapes_foggy_train')
         evaluator_pseudo = self.build_evaluator(cfg, 'cityscapes_foggy_pseudo_labels', allow_cached=False)
 
+        print('Running on cityscapes_foggy_train strong')
         results_i, results_pseudo = self.inference_on_dataset_pseudo(self.model, data_loader, evaluator, evaluator_pseudo=evaluator_pseudo)
         results['cityscapes_foggy_train_strong'] = results_i
         if comm.is_main_process():
@@ -1067,6 +1078,7 @@ class ATeacherTrainer(DefaultTrainer):
                 results[dataset_name] = {}
                 continue
 
+            print('Running on {}'.format(dataset_name))
             results_i = inference_on_dataset(self.model_teacher, data_loader, evaluator)
             results[dataset_name] = results_i
             if comm.is_main_process():

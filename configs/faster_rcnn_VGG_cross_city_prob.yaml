@@ -4,9 +4,11 @@ OUTPUT_DIR: "output/test_cov2"
 # OUTPUT_DIR: "output/test_cov_temp1"
 # OUTPUT_DIR: "output/test_prob_early"
 # OUTPUT_DIR: "output/test_prob_nll"
-# OUTPUT_DIR: "output/test_nll"
-# OUTPUT_DIR: "output/test_iou_select_080"
 # OUTPUT_DIR: "output/at_scaled"
+# OUTPUT_DIR: "output/test_iou_select_080"
+# OUTPUT_DIR: "output/test_v2_nom"
+# OUTPUT_DIR: "output/test_v2_iou70"
+# OUTPUT_DIR: "output/test_v2_iou70_test"
 INPUT:
   CLEAN_DETECTIONS: False
   MAX_OCCLUSION: 0.5
@@ -56,7 +58,7 @@ MODEL:
     ANNEALING_STEP: 10000
     PROB_IOU: True
     SELECT_IOU: False
-    SCALE_LOSS: True
+    SCALE_LOSS: False
     SCALE_EXPO_SCORE: 1.0
     SCALE_EXPO_IOU: 1.0
 SOLVER:
@@ -79,18 +81,21 @@ DATASETS:
   TEST: ("cityscapes_foggy_val",)
 SEMISUPNET:
   Trainer: "ateacher"
-  BBOX_THRESHOLD: 0.8
-  # BBOX_THRESHOLD: 0.15
+  # BBOX_THRESHOLD: 0.8
+  BBOX_THRESHOLD: 0.15
   TEACHER_UPDATE_ITER: 1
-  BURN_UP_STEP: 20000
-  # BURN_UP_STEP: 1
+  # BURN_UP_STEP: 20000
+  BURN_UP_STEP: 1
   EMA_KEEP_RATE: 0.9996
   UNSUP_LOSS_WEIGHT: 1.0
   SUP_LOSS_WEIGHT: 1.0
   DIS_TYPE: "vgg4" #["concate","p2","multi"]
+  DOMAIN_ADV_INST: 0.0
+  # DOMAIN_ADV_INST: 1.0
+  ALIGN_PROPOSALS: False
 TEST:
-  EVAL_PERIOD: 2500
-  # EVAL_PERIOD: 10
+  # EVAL_PERIOD: 2500
+  EVAL_PERIOD: 10
 
 
 
