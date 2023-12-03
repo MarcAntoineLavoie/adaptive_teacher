@@ -82,7 +82,6 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             # computed as:  (N * (N + 1)) / 2
             bbox_cov_dims = 10
 
-
         box_predictor = ProbabilisticFastRCNNOutputLayers(
             cfg,
             box_head.output_shape,
@@ -170,13 +169,13 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         predictions = self.box_predictor(box_features)
         del box_features
 
-        if self.align_proposals:
-            self.keep_proposals = dict((branch,predictions))
+        if self.box_predictor.align_proposals and 'supervised' in branch:
+            self.keep_proposals[branch] = [predictions[0], cat([p.gt_classes for p in proposals], dim=0)]
 
         if (
             self.training and compute_loss
         ) or compute_val_loss:  # apply if training loss or val loss
-            losses = self.box_predictor.losses(predictions, proposals, unsup=unsup, current_step=current_step)
+            losses = self.box_predictor.losses(predictions, proposals, unsup=unsup, current_step=current_step, branch=branch)
 
             if self.train_on_pred_boxes:
                 with torch.no_grad():
@@ -379,6 +378,9 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         if self.domain_invariant_inst:
             self.DA_layer = FCDiscriminator_inst(input_shape.channels)
             self.DA_scores = []
+        self.align_proposals = align_proposals
+
+        a=1
 
     @classmethod
     def from_config(cls,
@@ -421,8 +423,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "scale_expo_score": cfg.MODEL.PROBABILISTIC_MODELING.SCALE_EXPO_SCORE,
             "scale_expo_iou": cfg.MODEL.PROBABILISTIC_MODELING.SCALE_EXPO_IOU,
             "domain_invariant_inst": cfg.SEMISUPNET.DOMAIN_ADV_INST,
-            "align_proposals": cfg.SEMISUPNET.ALIGN_PROPOSALS
-            # "domain_invariant_inst": 0,
+            "align_proposals": cfg.SEMISUPNET.ALIGN_PROPOSALS,
         }
 
     def forward(self, x):
@@ -459,7 +460,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
         return scores, proposal_deltas, score_vars, proposal_covs
 
-    def losses(self, predictions, proposals, current_step=0, unsup=False, DA_label=0):
+    def losses(self, predictions, proposals, current_step=0, unsup=False, branch="supervised"):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -704,6 +705,10 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                 fg_idx = gt_classes < n
                 # logit_thresh = pred_class_logits.gather(1, gt_classes.unsqueeze(1)) > 0.7
                 self.DA_scores = self.DA_scores[fg_idx]
+            if branch == 'supervised':
+                DA_label = 0
+            elif branch == 'supervised_target':
+                DA_label = 1
             loss_DA_inst = self.domain_invariant_inst * F.binary_cross_entropy_with_logits(self.DA_scores, torch.FloatTensor(self.DA_scores.data.size()).fill_(DA_label).to(self.DA_scores.device))
 
             losses = {"loss_cls": loss_cls, "loss_box_reg": loss_box_reg, "loss_DA_inst": loss_DA_inst}

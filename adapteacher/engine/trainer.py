@@ -63,6 +63,8 @@ from detectron2.structures.boxes import pairwise_iou, pairwise_intersection
 from math import comb
 from adapteacher.modeling.prob_rcnn import ProbROIHeadsPseudoLab
 
+import geomloss
+
 # Supervised-only Trainer
 class BaselineTrainer(DefaultTrainer):
     def __init__(self, cfg):
@@ -360,8 +362,13 @@ class ATeacherTrainer(DefaultTrainer):
         self.prob_iou = cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU
         self.select_iou = cfg.MODEL.PROBABILISTIC_MODELING.SELECT_IOU
         self.align_proposals = cfg.SEMISUPNET.ALIGN_PROPOSALS
-        self.model.roi_heads.align_proposals = self.align_proposals
-        self.model_teacher.roi_heads.align_proposals = self.align_proposals
+        if self.align_proposals:
+            self.model.roi_heads.align_proposals = self.align_proposals
+            self.model_teacher.roi_heads.align_proposals = self.align_proposals
+            if cfg.SEMISUPNET.ALIGN_LOSS == 'sinkhorn':
+                sinkhorn_blur = 0.05
+                sinkhorn_p_norm = 2
+                self.align_loss = geomloss.SamplesLoss(loss="sinkhorn", p=sinkhorn_p_norm, blur=sinkhorn_blur, scaling=0.1)
 
     def resume_or_load(self, resume=True):
         """
@@ -586,6 +593,8 @@ class ATeacherTrainer(DefaultTrainer):
 
         # print(self.iter, self.model.iter)
 
+        self.model.roi_heads.keep_proposals = {}
+
         # burn-in stage (supervised training with labeled data)
         if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP:
 
@@ -683,9 +692,6 @@ class ATeacherTrainer(DefaultTrainer):
             )
             record_dict.update(record_all_label_data)
 
-            if self.align_proposals:
-                proposals_s = self.model.roi_heads.keep_proposals["supervised"]
-
             # 5. input strongly augmented unlabeled data into model
             record_all_unlabel_data, _, _, _ = self.model(
                 all_unlabel_data, branch="supervised_target"
@@ -698,7 +704,10 @@ class ATeacherTrainer(DefaultTrainer):
             record_dict.update(new_record_all_unlabel_data)
 
             if self.align_proposals:
-                proposals_t = self.model.roi_heads.keep_proposals["supervised_target"]
+                # proposals_t = self.model.roi_heads.keep_proposals["supervised_target"]
+                self.align_proposals_loss()
+                record_dict.update(self.loss_align)
+
 
             # 6. input weakly labeled data (source) and weakly unlabeled data (target) to student model
             # give sign to the target data
@@ -1369,6 +1378,20 @@ class ATeacherTrainer(DefaultTrainer):
         if results is None:
             results = {}
         return results, results_pseudo
+    
+    def align_proposals_loss(self):
+        n = self.model.roi_heads.keep_proposals["supervised"][0].shape[1]
+        sample_s = self.model.roi_heads.keep_proposals["supervised"]
+        sample_t = self.model.roi_heads.keep_proposals["supervised_target"]
+        losses = []
+        for label in range(n):
+            idx_s = sample_s[1] == label
+            sample_label_s = sample_s[0][idx_s,:]
+            idx_t = sample_s[1] == label
+            sample_label_t = sample_s[0][idx_t,:]
+            losses.append(self.align_loss(sample_label_s, sample_label_t))
+        self.loss_align = {'loss_align': sum(losses) / n}
+
     
 def load_pseudo_dicts(filename):
     with open(filename, 'r') as f_in:

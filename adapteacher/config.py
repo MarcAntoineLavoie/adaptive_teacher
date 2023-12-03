@@ -41,6 +41,7 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.DIS_LOSS_WEIGHT = 0.1
     _C.SEMISUPNET.DOMAIN_ADV_INST = 0.0
     _C.SEMISUPNET.ALIGN_PROPOSALS = False
+    _C.SEMISUPNET.ALIGN_LOSS = "sinkhorn"
 
     # dataloader
     # supervision level
