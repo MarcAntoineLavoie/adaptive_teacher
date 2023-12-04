@@ -363,8 +363,12 @@ class ATeacherTrainer(DefaultTrainer):
         self.select_iou = cfg.MODEL.PROBABILISTIC_MODELING.SELECT_IOU
         self.align_proposals = cfg.SEMISUPNET.ALIGN_PROPOSALS
         if self.align_proposals:
-            self.model.roi_heads.align_proposals = self.align_proposals
-            self.model_teacher.roi_heads.align_proposals = self.align_proposals
+            if 'module' in self.model.__dict__['_modules']:
+                self.model.module.roi_heads.align_proposals = self.align_proposals
+                self.model_teacher.module.roi_heads.align_proposals = self.align_proposals
+            else:
+                self.model.roi_heads.align_proposals = self.align_proposals
+                self.model_teacher.roi_heads.align_proposals = self.align_proposals
             if cfg.SEMISUPNET.ALIGN_LOSS == 'sinkhorn':
                 sinkhorn_blur = 0.05
                 sinkhorn_p_norm = 2
@@ -593,8 +597,11 @@ class ATeacherTrainer(DefaultTrainer):
 
         # print(self.iter, self.model.iter)
 
-        self.model.roi_heads.keep_proposals = {}
-
+        if 'module' in self.model.__dict__['_modules']:
+            self.model.module.roi_heads.keep_proposals = {}
+        else:
+            self.model.roi_heads.keep_proposals = {}
+            
         # burn-in stage (supervised training with labeled data)
         if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP:
 
@@ -1380,15 +1387,20 @@ class ATeacherTrainer(DefaultTrainer):
         return results, results_pseudo
     
     def align_proposals_loss(self):
-        n = self.model.roi_heads.keep_proposals["supervised"][0].shape[1]
-        sample_s = self.model.roi_heads.keep_proposals["supervised"]
-        sample_t = self.model.roi_heads.keep_proposals["supervised_target"]
+        if 'module' in self.model.__dict__['_modules']:
+            n = self.model.module.roi_heads.keep_proposals["supervised"][0].shape[1]
+            sample_s = self.model.module.roi_heads.keep_proposals["supervised"]
+            sample_t = self.model.module.roi_heads.keep_proposals["supervised_target"]
+        else:
+            n = self.model.roi_heads.keep_proposals["supervised"][0].shape[1]
+            sample_s = self.model.roi_heads.keep_proposals["supervised"]
+            sample_t = self.model.roi_heads.keep_proposals["supervised_target"]
         losses = []
         for label in range(n):
             idx_s = sample_s[1] == label
             sample_label_s = sample_s[0][idx_s,:]
             idx_t = sample_s[1] == label
-            sample_label_t = sample_s[0][idx_t,:]
+            sample_label_t = sample_t[0][idx_t,:]
             losses.append(self.align_loss(sample_label_s, sample_label_t))
         self.loss_align = {'loss_align': sum(losses) / n}
 
