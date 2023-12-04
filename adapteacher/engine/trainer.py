@@ -365,7 +365,7 @@ class ATeacherTrainer(DefaultTrainer):
         if self.align_proposals:
             if 'module' in self.model.__dict__['_modules']:
                 self.model.module.roi_heads.align_proposals = self.align_proposals
-                self.model_teacher.module.roi_heads.align_proposals = self.align_proposals
+                self.model_teacher.roi_heads.align_proposals = self.align_proposals
             else:
                 self.model.roi_heads.align_proposals = self.align_proposals
                 self.model_teacher.roi_heads.align_proposals = self.align_proposals
