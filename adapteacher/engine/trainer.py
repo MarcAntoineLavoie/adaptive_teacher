@@ -1399,7 +1399,7 @@ class ATeacherTrainer(DefaultTrainer):
         for label in range(n):
             idx_s = sample_s[1] == label
             sample_label_s = sample_s[0][idx_s,:]
-            idx_t = sample_s[1] == label
+            idx_t = sample_t[1] == label
             sample_label_t = sample_t[0][idx_t,:]
             losses.append(self.align_loss(sample_label_s, sample_label_t))
         self.loss_align = {'loss_align': sum(losses) / n}
