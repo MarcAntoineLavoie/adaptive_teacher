@@ -380,8 +380,6 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             self.DA_scores = []
         self.align_proposals = align_proposals
 
-        a=1
-
     @classmethod
     def from_config(cls,
                     cfg,
@@ -934,7 +932,7 @@ def prob_fast_rcnn_inference_single_image(
             result.iou = -torch.ones_like(scores)
     else:
         result.pred_box_covs = -torch.ones_like(boxes)
-    if not (score_covs < 0).any():
+    if not (score_covs < 0).any() and score_covs.dim() > 1:
         score_covs = score_covs[filter_mask]
     else:
         result.pred_score_covs = -torch.ones_like(scores)
@@ -973,3 +971,7 @@ def intersect_self(dt_bbox, bbox_cov):
 
 # im_test = im_big[:,:,2]
 # plt.figure();plt.imshow(im_test);plt.show()
+
+
+# plt.figure();plt.plot(val1[:,1],val1[:,2]);plt.plot(val2[:,1],val2[:,2]);plt.plot(val3[:,1],val3[:,2]);
+# plt.xlabel('Epoch');plt.ylabel('AP50');plt.legend(['Nominal','IoU 70','IoU 80']);plt.tight_layout();plt.show()

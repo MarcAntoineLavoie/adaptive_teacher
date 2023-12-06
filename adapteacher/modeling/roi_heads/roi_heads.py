@@ -144,10 +144,10 @@ class StandardROIHeadsPseudoLab(StandardROIHeads):
                         proposals_per_image.proposal_boxes = Boxes(pred_boxes_per_image)
             return losses, predictions
         else:
-            if branch == "unsup_data_weak":
-                unsup = 1
-            else:
-                unsup = 0
+            # if branch == "unsup_data_weak":
+            #     unsup = 1
+            # else:
+            #     unsup = 0
             # pred_instances, _ = self.box_predictor.inference(predictions, proposals, unsup=unsup)
             pred_instances, _ = self.box_predictor.inference(predictions, proposals)
             return pred_instances, predictions
