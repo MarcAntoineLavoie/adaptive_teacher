@@ -291,6 +291,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         scale_expo_iou=0.0,
         domain_invariant_inst=0.0,
         align_proposals=False,
+        burnup_steps=20000,
     ):
         """
         NOTE: this interface is experimental.
@@ -379,6 +380,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             self.DA_layer = FCDiscriminator_inst(input_shape.channels)
             self.DA_scores = []
         self.align_proposals = align_proposals
+        self.burnup_steps = burnup_steps
 
     @classmethod
     def from_config(cls,
@@ -422,6 +424,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "scale_expo_iou": cfg.MODEL.PROBABILISTIC_MODELING.SCALE_EXPO_IOU,
             "domain_invariant_inst": cfg.SEMISUPNET.DOMAIN_ADV_INST,
             "align_proposals": cfg.SEMISUPNET.ALIGN_PROPOSALS,
+            "burnup_steps": cfg.SEMISUPNET.BURN_UP_STEP,
         }
 
     def forward(self, x):
@@ -696,7 +699,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                                               reduction="sum",)
                 loss_box_reg = loss_box_reg / loss_reg_normalizer
 
-        if self.domain_invariant_inst:
+        if self.domain_invariant_inst and current_step >= self.burnup_steps:
             use_only_fg = False
             if use_only_fg:
                 n = pred_class_logits.shape[1] -1
