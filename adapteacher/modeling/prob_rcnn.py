@@ -165,12 +165,14 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
     ) -> Union[Dict[str, torch.Tensor], List[Instances]]:
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
+        if self.box_predictor.align_proposals and 'supervised' in branch:
+            self.process_proposals(box_features, proposals)
+            # self.keep_proposals[branch] = [predictions[0], cat([p.gt_classes for p in proposals], dim=0)]
         box_features = self.box_head(box_features)
         predictions = self.box_predictor(box_features)
         del box_features
 
-        if self.box_predictor.align_proposals and 'supervised' in branch:
-            self.keep_proposals[branch] = [predictions[0], cat([p.gt_classes for p in proposals], dim=0)]
+
 
         if (
             self.training and compute_loss
@@ -251,6 +253,18 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         )
 
         return proposals_with_gt
+    
+    def process_proposals(self, box_features, proposals):
+        subsample = "random"
+        if subsample == "random":
+            feat_shape = box_features.shape
+            n = feat_shape[2]*feat_shape[3]
+            ids = np.arange(n)
+            probs = np.ones(n)
+
+            select_ids = np.random.choice(ids,n,replace=False, p=probs)
+            box_features_sub = box_features.reshape(feat_shape[0],feat_shape[1],n)[:,:,select_ids]
+        self.keep_proposals[branch] = [box_features, cat([p.gt_classes for p in proposals], dim=0)]
     
 
 class ProbabilisticFastRCNNOutputLayers(nn.Module):
@@ -699,7 +713,11 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                                               reduction="sum",)
                 loss_box_reg = loss_box_reg / loss_reg_normalizer
 
-        if self.domain_invariant_inst and current_step >= self.burnup_steps:
+        if self.domain_invariant_inst:
+            if current_step >= self.burnup_steps:
+                scale = 1.0
+            else:
+                scale = 1e-10
             use_only_fg = False
             if use_only_fg:
                 n = pred_class_logits.shape[1] -1
@@ -710,7 +728,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                 DA_label = 0
             elif branch == 'supervised_target':
                 DA_label = 1
-            loss_DA_inst = self.domain_invariant_inst * F.binary_cross_entropy_with_logits(self.DA_scores, torch.FloatTensor(self.DA_scores.data.size()).fill_(DA_label).to(self.DA_scores.device))
+            loss_DA_inst = scale * self.domain_invariant_inst * F.binary_cross_entropy_with_logits(self.DA_scores, torch.FloatTensor(self.DA_scores.data.size()).fill_(DA_label).to(self.DA_scores.device))
 
             losses = {"loss_cls": loss_cls, "loss_box_reg": loss_box_reg, "loss_DA_inst": loss_DA_inst}
         else:
