@@ -198,11 +198,24 @@ class prob_COCOeval(COCOeval):
                         box_dtIoU[lv1,lv2] = box_dtIoU[0,lv2]
                     else:
                         bbox_dt = self._dts[imgId, catId][lv2]['bbox']
+                        covs_dt = self._dts[imgId, catId][lv2]['bbox_covs']
                         box_dtIoU[lv1,lv2] = self.intersect_self(bbox_dt, covs_dt)
 
         # set unmatched detections outside of area range to ignore
         a = np.array([d['area']<aRng[0] or d['area']>aRng[1] for d in dt]).reshape((1, len(dt)))
         dtIg = np.logical_or(dtIg, np.logical_and(dtm==0, np.repeat(a,T,0)))
+
+        ids_d = [d['id'] for d in dt]
+        ids_g = [g['id'] for g in gt]
+        dt_logits = []
+        for val, id_g in zip(gtm[0,:], ids_g):
+            if val:
+                idx = ids_d.index(int(val))
+                logits = dt[idx]['prop_logits']
+            else:
+                logits = []
+            dt_logits.append((catId, id_g, val, logits))
+
         # store results for given image and category
         return {
                 'image_id':     imgId,
@@ -223,6 +236,7 @@ class prob_COCOeval(COCOeval):
                 'dtDeltas':     box_deltas,
                 'dtCDF':        box_cdf,
                 'dtcovs':       box_cov,
+                'dtLogits':     dt_logits,
             }
     
     def accumulate(self, p = None):
@@ -247,6 +261,19 @@ class prob_COCOeval(COCOeval):
         precision   = -np.ones((T,R,K,A,M)) # -1 for the precision of absent categories
         recall      = -np.ones((T,K,A,M))
         scores      = -np.ones((T,R,K,A,M))
+
+        # class_logits = [[],[],[],[],[],[],[],[]]
+        # for img in self.evalImgs:
+        #     if img is not None:
+        #         for prop in img['dtLogits']:
+        #             label = img['category_id']
+        #             class_logits[label].append(prop[3])
+
+        # import pickle
+        # file_out = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/output/test_v2_nom/city_logits.pkl'
+        # with open(file_out, 'wb') as f_out: 
+        #     pickle.dump(class_logits,  f_out)
+
 
         # create dictionary for future indexing
         _pe = self._paramsEval

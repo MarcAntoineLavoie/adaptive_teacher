@@ -24,6 +24,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 load_only_002 = False
+# load_only_002 = True
 
 def _get_cityscapes_files(image_dir, gt_dir):
     files = []

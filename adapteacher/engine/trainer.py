@@ -364,15 +364,31 @@ class ATeacherTrainer(DefaultTrainer):
         self.align_proposals = cfg.SEMISUPNET.ALIGN_PROPOSALS
         if self.align_proposals:
             if 'module' in self.model.__dict__['_modules']:
+                self.model.roi_heads.build_queues(n_classes=8, n_samples=200, feat_dim=512)
                 self.model.module.roi_heads.align_proposals = self.align_proposals
-                self.model_teacher.roi_heads.align_proposals = self.align_proposals
+                self.model.module.roi_heads.current_proposals = {}
             else:
+                self.model.roi_heads.build_queues(n_classes=8, n_samples=200, feat_dim=512)
                 self.model.roi_heads.align_proposals = self.align_proposals
-                self.model_teacher.roi_heads.align_proposals = self.align_proposals
+                self.model.roi_heads.current_proposals = {}
+            self.model_teacher.roi_heads.align_proposals = self.align_proposals
+            self.model_teacher.roi_heads.current_proposals = {}
             if cfg.SEMISUPNET.ALIGN_LOSS == 'sinkhorn':
                 sinkhorn_blur = 0.05
                 sinkhorn_p_norm = 2
                 self.align_loss = geomloss.SamplesLoss(loss="sinkhorn", p=sinkhorn_p_norm, blur=sinkhorn_blur, scaling=0.1)
+            elif cfg.SEMISUPNET.ALIGN_LOSS == 'contrast':
+                if 'module' in self.model.__dict__['_modules']:
+                    self.proj_head = self.model.module.roi_heads.box_predictor.proj_head
+                else:
+                    self.proj_head = self.model.roi_heads.box_predictor.proj_head
+                temperature  = 0.07
+                use_proj = True
+                # feat_dim = self.model_teacher.roi_heads
+                feat_dim = 512
+                n_labels = 9
+                select = 'all'
+                self.align_loss = ContrastLoss(self.proj_head, n_labels, select, temperature=temperature, scale=cfg.SEMISUPNET.ALIGN_WEIGHT)
 
     def resume_or_load(self, resume=True):
         """
@@ -410,6 +426,7 @@ class ATeacherTrainer(DefaultTrainer):
         if evaluator_type == "coco":
             # use_prob = True if cfg.MODEL.META_ARCHITECTURE == 'ProbDATwoStagePseudoLabGeneralizedRCNN' else False
             use_prob = False
+            # allow_cached = False
             evaluator_list.append(COCOEvaluator(
                 dataset_name, output_dir=output_folder, allow_cached=allow_cached, use_prob=use_prob))
         elif evaluator_type == "pascal_voc":
@@ -599,8 +616,12 @@ class ATeacherTrainer(DefaultTrainer):
 
         if 'module' in self.model.__dict__['_modules']:
             self.model.module.roi_heads.keep_proposals = {}
+            self.model.module.roi_heads.keep_stats = False
+            self.model_teacher.module.roi_heads.keep_stats = False
         else:
             self.model.roi_heads.keep_proposals = {}
+            self.model.roi_heads.keep_stats = False
+            self.model_teacher.roi_heads.keep_stats = False
             
         # burn-in stage (supervised training with labeled data)
         if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP:
@@ -712,8 +733,8 @@ class ATeacherTrainer(DefaultTrainer):
 
             if self.align_proposals:
                 # proposals_t = self.model.roi_heads.keep_proposals["supervised_target"]
-                self.align_proposals_loss()
-                record_dict.update(self.loss_align)
+                loss_align = self.align_proposals_loss()
+                record_dict.update(loss_align)
 
 
             # 6. input weakly labeled data (source) and weakly unlabeled data (target) to student model
@@ -889,6 +910,8 @@ class ATeacherTrainer(DefaultTrainer):
                    test_and_save_results_student))
         ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
                    test_and_save_results_teacher))
+        # ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
+                #    test_and_save_results_student))
 
         if comm.is_main_process():
             # run writers in the end, so that evaluation metrics are written
@@ -1388,22 +1411,23 @@ class ATeacherTrainer(DefaultTrainer):
     
     def align_proposals_loss(self):
         if 'module' in self.model.__dict__['_modules']:
-            n = self.model.module.roi_heads.keep_proposals["supervised"][0].shape[1]
-            sample_s = self.model.module.roi_heads.keep_proposals["supervised"]
-            sample_t = self.model.module.roi_heads.keep_proposals["supervised_target"]
+            logits = self.model.module.roi_heads.current_proposals
         else:
-            n = self.model.roi_heads.keep_proposals["supervised"][0].shape[1]
-            sample_s = self.model.roi_heads.keep_proposals["supervised"]
-            sample_t = self.model.roi_heads.keep_proposals["supervised_target"]
-        losses = []
-        for label in range(n):
-            idx_s = sample_s[1] == label
-            sample_label_s = sample_s[0][idx_s,:]
-            idx_t = sample_t[1] == label
-            sample_label_t = sample_t[0][idx_t,:]
-            losses.append(self.align_loss(sample_label_s, sample_label_t))
-        self.loss_align = {'loss_align': sum(losses) / n}
+            logits = self.model.roi_heads.current_proposals
+        
+        loss_align = self.align_loss(logits)
 
+        # losses = []
+
+        # for label in range(n):
+        #     idx_s = sample_s[1] == label
+        #     sample_label_s = sample_s[0][idx_s,:]
+        #     idx_t = sample_t[1] == label
+        #     sample_label_t = sample_t[0][idx_t,:]
+        #     losses.append(self.align_loss(sample_label_s, sample_label_t))
+        # self.loss_align = {'loss_align': sum(losses) / n}
+
+        return {'loss_align': loss_align}
     
 def load_pseudo_dicts(filename):
     with open(filename, 'r') as f_in:
@@ -1424,6 +1448,74 @@ def inference_context(model):
     model.eval()
     yield
     model.train(training_mode)
+
+
+# class NormedLinear(nn.Module):
+#     def __init__(self, feat_dim, temp):
+#         super(NormedLinear, self).__init__()
+#         self.weight = torch.nn.Parameter(torch.Tensor(feat_dim, feat_dim))
+#         self.weight.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
+#         self.temp = temp
+
+#     def forward(self, x):
+#         out = nn.functional.normalize(x, dim=1).mm(nn.functional.normalize(self.weight, dim=0)) / self.temp
+#         return out
+
+
+class ContrastLoss(nn.Module):
+    def __init__(self, proj_head, n_labels, select, temperature=0.07, intra_align=False, scale=1.0):
+        super(ContrastLoss, self).__init__()
+        self.proj_head = proj_head
+        self.n_labels = n_labels
+        self.select = select
+        self.temp = temperature
+        self.intra_align = intra_align
+        self.criterion = nn.CrossEntropyLoss()
+        self.scale = scale
+
+    def forward(self, logits):
+        labels_s, feat_s = logits['supervised']
+        labels_t, feat_t = logits['supervised_target']
+        if self.select == 'all':
+            labels_s = torch.cat(labels_s)
+            feat_s = torch.cat(feat_s)
+            nfeat_s = self.proj_head(feat_s)
+
+            labels_t = torch.cat(labels_t)
+            feat_t = torch.cat(feat_t)
+            nfeat_t = self.proj_head(feat_t)
+
+        # elif self.select == 'background':
+        #     labels_s = labels_s
+        #     feat_s = torch.cat(feat_s)
+        #     labels_t = torch.cat(labels_t)
+        #     feat_t = torch.cat(feat_t)
+
+        if self.intra_align:
+            feat_1 = torch.cat((feat_s, nfeat_t))
+            labels_1 = torch.cat((labels_s, labels_t))
+            feat_2 = torch.cat((feat_s, nfeat_t))
+            labels_2 = torch.cat((labels_s, labels_t))
+        else:
+            feat_1 = nfeat_s
+            labels_1 = labels_s
+            feat_2 = nfeat_t
+            labels_2 = labels_t
+        
+        logits = torch.matmul(feat_1, feat_2.T)/self.temp
+        targets = torch.eq(labels_1, labels_2.unsqueeze(1)).to(device=logits.device)
+        exp_logits = torch.exp(logits)
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)
+        mean_log_prob_pos = (targets * log_prob).sum(1) / targets.sum(1)
+        loss = -mean_log_prob_pos.mean() * self.scale
+       
+        # # compute mean of log-likelihood over positive
+        # mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
+        # log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)
+
+        # test = self.criterion()
+
+        return loss
 
 # def temp():
 #     import matplotlib.pyplot as plt

@@ -34,6 +34,7 @@ def setup(args):
         cfg.SOLVER.IMG_PER_BATCH_LABEL = 2
         cfg.SOLVER.IMG_PER_BATCH_UNLABEL = 2
         cfg.TEST.EVAL_PERIOD = 20
+        # cfg.DATASETS.TEST = ("cityscapes_val",)
     else:
         cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
@@ -114,7 +115,7 @@ if __name__ == "__main__":
     #   OUTPUT_DIR output/exp_city
 
     # args.num_gpus = 1
-    # args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
+    args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_test.yaml'
     # args.resume = False
@@ -124,7 +125,7 @@ if __name__ == "__main__":
 
     # args.eval_only = True
 
-    # args.output_dir = 'output/test_v2_iou70_test'
+    # args.output_dir = 'output/test_v2_nom'
     # args.use_old_cfg = True
     args.use_old_cfg = False
 

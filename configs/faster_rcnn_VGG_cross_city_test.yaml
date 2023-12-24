@@ -1,12 +1,12 @@
 _BASE_: "./Base-RCNN-C4.yaml"
-# OUTPUT_DIR: "output/at_scaled"
-OUTPUT_DIR: "output/test4"
+OUTPUT_DIR: "output/test_v2_nom"
 INPUT:
-  CLEAN_DETECTIONS: True
+  CLEAN_DETECTIONS: False
   MAX_OCCLUSION: 0.5
 MODEL:
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
-  META_ARCHITECTURE: "DAobjTwoStagePseudoLabGeneralizedRCNN"
+  # META_ARCHITECTURE: "DAobjTwoStagePseudoLabGeneralizedRCNN"
+  META_ARCHITECTURE: "ProbDATwoStagePseudoLabGeneralizedRCNN"
   BACKBONE:
     NAME: "build_vgg_backbone"
   MASK_ON: False
@@ -23,7 +23,8 @@ MODEL:
     # PRE_NMS_TOPK_TRAIN: 6000
     # POST_NMS_TOPK_TRAIN: 1000
   ROI_HEADS:
-    NAME: "StandardROIHeadsPseudoLab"
+    # NAME: "StandardROIHeadsPseudoLab"
+    NAME: "ProbROIHeadsPseudoLab"
     LOSS: "CrossEntropy" # variant: "CrossEntropy"
     NUM_CLASSES: 8
     IN_FEATURES: ["vgg4"]
@@ -33,6 +34,20 @@ MODEL:
     NAME: "FastRCNNConvFCHead"
     NUM_FC: 2
     POOLER_RESOLUTION: 7
+    SMOOTH_L1_BETA_PROB: 3.0
+  PROBABILISTIC_MODELING:
+  # One of the following Loss types: 'none' or 'negative_log_likelihood', 'second_moment_matching', 'energy_loss'.
+    BBOX_COV_LOSS:
+        NAME: 'energy_loss'
+        # NAME: 'negative_log_likelihood'
+        COVARIANCE_TYPE: 'diagonal' # One of the following: 'full', 'diagonal'
+        NUM_SAMPLES: 1000
+    ANNEALING_STEP: 10000
+    PROB_IOU: True
+    SELECT_IOU: False
+    SCALE_LOSS: True
+    SCALE_EXPO_SCORE: 1.0
+    SCALE_EXPO_IOU: 1.0
 SOLVER:
   LR_SCHEDULER_NAME: "WarmupTwoStageMultiStepLR"
   STEPS: (60000, 80000, 90000, 360000)
@@ -40,8 +55,8 @@ SOLVER:
   MAX_ITER: 100000
   # IMG_PER_BATCH_LABEL: 16
   # IMG_PER_BATCH_UNLABEL: 16
-  IMG_PER_BATCH_LABEL: 3
-  IMG_PER_BATCH_UNLABEL: 3
+  IMG_PER_BATCH_LABEL: 8
+  IMG_PER_BATCH_UNLABEL: 8
   BASE_LR: 0.04
 DATALOADER:
   SUP_PERCENT: 100.0
@@ -56,14 +71,13 @@ SEMISUPNET:
   BBOX_THRESHOLD: 0.8
   TEACHER_UPDATE_ITER: 1
   BURN_UP_STEP: 20000
-  # BURN_UP_STEP: 10
+  # BURN_UP_STEP: 200
   EMA_KEEP_RATE: 0.9996
   UNSUP_LOSS_WEIGHT: 1.0
   SUP_LOSS_WEIGHT: 1.0
   DIS_TYPE: "vgg4" #["concate","p2","multi"]
 TEST:
   EVAL_PERIOD: 1000
-  # EVAL_PERIOD: 20
 # INPUT:
 #   MIN_SIZE_TRAIN: (450,)
 

@@ -33,6 +33,8 @@ from detectron2.layers import ShapeSpec, batched_nms, cat, cross_entropy, nonzer
 
 from adapteacher.modeling.meta_arch.rcnn import FCDiscriminator_inst, grad_reverse
 
+import random
+
 @ROI_HEADS_REGISTRY.register()
 class ProbROIHeadsPseudoLab(StandardROIHeads):
     @classmethod
@@ -166,17 +168,21 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
         if self.box_predictor.align_proposals and 'supervised' in branch:
-            self.process_proposals(box_features, proposals)
+            self.process_proposals(box_features, proposals, branch)
             # self.keep_proposals[branch] = [predictions[0], cat([p.gt_classes for p in proposals], dim=0)]
         box_features = self.box_head(box_features)
         predictions = self.box_predictor(box_features)
-        del box_features
+
+        
+        # if self.keep_stats:
+        #     pass
 
 
 
         if (
             self.training and compute_loss
         ) or compute_val_loss:  # apply if training loss or val loss
+            del box_features
             losses = self.box_predictor.losses(predictions, proposals, unsup=unsup, current_step=current_step, branch=branch)
 
             if self.train_on_pred_boxes:
@@ -193,6 +199,9 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             pred_instances, ids_ = self.box_predictor.inference(predictions, proposals, unsup=unsup)
             for instance, proposal, ids in zip(pred_instances, proposals, ids_):
                 instance.rpn_score = proposal.objectness_logits[ids]
+                if self.keep_stats:
+                    instance.logits = box_features[ids,:]
+            del box_features
             return pred_instances, predictions
 
     @torch.no_grad()
@@ -244,27 +253,108 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             num_fg_samples.append(gt_classes.numel() - num_bg_samples[-1])
             proposals_with_gt.append(proposals_per_image)
 
-        storage = get_event_storage()
-        storage.put_scalar(
-            "roi_head/num_target_fg_samples_" + branch, np.mean(num_fg_samples)
-        )
-        storage.put_scalar(
-            "roi_head/num_target_bg_samples_" + branch, np.mean(num_bg_samples)
-        )
+        if "supervised" in branch:
+            storage = get_event_storage()
+            storage.put_scalar(
+                "roi_head/num_target_fg_samples_" + branch, np.mean(num_fg_samples)
+            )
+            storage.put_scalar(
+                "roi_head/num_target_bg_samples_" + branch, np.mean(num_bg_samples)
+            )
 
         return proposals_with_gt
     
-    def process_proposals(self, box_features, proposals):
+    def process_proposals(self, box_features, proposals, branch):
         subsample = "random"
-        if subsample == "random":
-            feat_shape = box_features.shape
-            n = feat_shape[2]*feat_shape[3]
-            ids = np.arange(n)
-            probs = np.ones(n)
+        use_bg = False
+        n_samples = 10
+        max_samples = 200
+        device = box_features.device
 
-            select_ids = np.random.choice(ids,n,replace=False, p=probs)
-            box_features_sub = box_features.reshape(feat_shape[0],feat_shape[1],n)[:,:,select_ids]
-        self.keep_proposals[branch] = [box_features, cat([p.gt_classes for p in proposals], dim=0)]
+        feat_shape = box_features.shape
+        m = feat_shape[2]*feat_shape[3]
+        labels = cat([p.gt_classes for p in proposals], dim=0)
+        n1 = labels.max()
+        if use_bg:
+            n1 = n1 + 1
+        vals = []
+        nvals = []
+        for label in range(n1):
+            ids1 = labels == label
+            if ids1.any():
+                features = box_features[ids1,:,:,:].reshape(-1,512,m)
+                n2 = features.shape[0]
+                features = features.transpose(1,2).reshape(-1,512)
+                ids2 = sum([random.sample(list(range(i*m,(i+1)*m)), n_samples) for i in range(n2)], [])
+                vals.append(features[ids2,:])
+                nvals.append(len(ids2))
+            else:
+                vals.append([])
+                nvals.append(0)
+
+        samples = self.sample_queue(branch, vals, nvals, max_samples=max_samples, device=device)
+        self.update_queue(branch, vals)
+
+        self.current_proposals[branch] = samples
+
+    def build_queues(self, n_classes, n_samples, feat_dim):
+        self.register_buffer("queue_source", torch.randn(n_classes, n_samples, feat_dim))
+        self.register_buffer("queue_target", torch.randn(n_classes, n_samples, feat_dim))
+        self.l_queue = n_samples
+
+    def sample_queue(self, branch, vals, nvals, max_samples=200, device=None):
+        if branch == 'supervised':
+            queue = self.queue_source
+        elif branch == 'supervised_target':
+            queue = self.queue_target
+        else:
+            raise ValueError("Unknown branch")
+
+        s1 = list(range(self.l_queue))
+        outputs = []
+        labels = []
+        for label in range(len(vals)):
+            nval = nvals[label]
+            if not nval:
+                n = max_samples
+                random.shuffle(s1)
+                ids = s1[:n]
+                new_vals = queue[label,ids,:].to(device=device)
+                outputs.append(new_vals)
+            elif nval < max_samples:
+                n = max_samples - nval
+                random.shuffle(s1)
+                ids = s1[:n]
+                new_vals = queue[label,ids,:].to(device=device)
+                outputs.append(cat((vals[label], new_vals),dim=0))
+            else:
+                s2 = list(range(nval))
+                random.shuffle(s2)
+                ids2 = s2[:max_samples]
+                outputs.append(vals[label][ids2,:])
+            labels.append(torch.ones(max_samples)*label)
+
+        return (labels, outputs)
+
+    def update_queue(self, branch, vals):
+        if branch == 'supervised':
+            queue = self.queue_source
+        elif branch == 'supervised_target':
+            queue = self.queue_target
+        else:
+            raise ValueError("Unknown branch")
+        max_samples = queue.shape[1]
+        for label in range(len(vals)):
+            n = len(vals[label])
+            if n >= max_samples:
+                ids = list(range(n))
+                random.shuffle(ids)
+                ids = ids[:max_samples]
+                queue[label,:,:] = vals[label][ids,:].detach().cpu()
+            elif not n:
+                pass
+            else:
+                queue[label,:,:] = cat((vals[label].detach().cpu(),queue[label,n:,:]))
     
 
 class ProbabilisticFastRCNNOutputLayers(nn.Module):
@@ -395,6 +485,11 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             self.DA_scores = []
         self.align_proposals = align_proposals
         self.burnup_steps = burnup_steps
+
+        if self.align_proposals:
+            feat_dim = 512
+            use_proj = True
+            self.proj_head = ProjectionHead(feat_dim=feat_dim, use_proj=use_proj)
 
     @classmethod
     def from_config(cls,
@@ -974,6 +1069,18 @@ def intersect_self(dt_bbox, bbox_cov):
 
     return mean_IoU
 
+class ProjectionHead(nn.Module):
+    def __init__(self, feat_dim=1024, use_proj=True):
+        super(ProjectionHead, self).__init__()
+        if use_proj:
+            self.head = nn.Sequential(nn.Linear(feat_dim, feat_dim), nn.BatchNorm1d(feat_dim), nn.ReLU(), nn.Linear(feat_dim, feat_dim))
+    
+    def forward(self, x):
+        out = self.head(x)
+        normed_out = nn.functional.normalize(out)
+        return normed_out
+
+
 # import matplotlib.pyplot as plt
 
 # v2 = 666/20
@@ -994,5 +1101,29 @@ def intersect_self(dt_bbox, bbox_cov):
 # plt.figure();plt.imshow(im_test);plt.show()
 
 
+# import numpy as np
+# import matplotlib.pyplot as plt
+
+# # f1 = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/props_v2_nom.csv'
+# # f2 = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/props_v2_nom_adv010.csv'
+
+# # val1 = np.genfromtxt(f1, delimiter=',')
+# # val2 = np.genfromtxt(f2, delimiter=',')
+
+# # plt.figure();plt.plot(val1[:,1],val1[:,2]);plt.plot(val2[:,1],val2[:,2])#;plt.plot(val3[:,1],val3[:,2]);
+# # plt.xlabel('Epoch');plt.ylabel('N pos anchors');plt.legend(['Baseline','Inst. Adv.']);plt.tight_layout()
+
+# f1 = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/ap50_v2_nom.csv'
+# # f2 = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/ap50_v2_nom_adv010_teacher.csv'
+# # f3 = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/ap50_v2_nom_adv010_student.csv'
+# f2 = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/ap50_v2_iou70_min30.csv'
+# f3 = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/ap50_v2_iou70_scale1.csv'
+
+# val1 = np.genfromtxt(f1, delimiter=',')
+# val2 = np.genfromtxt(f2, delimiter=',')
+# val3 = np.genfromtxt(f3, delimiter=',')
+
 # plt.figure();plt.plot(val1[:,1],val1[:,2]);plt.plot(val2[:,1],val2[:,2]);plt.plot(val3[:,1],val3[:,2]);
-# plt.xlabel('Epoch');plt.ylabel('AP50');plt.legend(['Nominal','IoU 70','IoU 80']);plt.tight_layout();plt.show()
+# plt.xlabel('Epoch');plt.ylabel('AP50');plt.legend(['Baseline','IoU','IoU + Scalet']);plt.tight_layout()
+
+# plt.show()
