@@ -364,7 +364,7 @@ class ATeacherTrainer(DefaultTrainer):
         self.align_proposals = cfg.SEMISUPNET.ALIGN_PROPOSALS
         if self.align_proposals:
             if 'module' in self.model.__dict__['_modules']:
-                self.model.roi_heads.build_queues(n_classes=8, n_samples=200, feat_dim=512)
+                self.model.module.roi_heads.build_queues(n_classes=8, n_samples=200, feat_dim=512)
                 self.model.module.roi_heads.align_proposals = self.align_proposals
                 self.model.module.roi_heads.current_proposals = {}
             else:
