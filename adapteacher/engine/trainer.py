@@ -617,7 +617,7 @@ class ATeacherTrainer(DefaultTrainer):
         if 'module' in self.model.__dict__['_modules']:
             self.model.module.roi_heads.keep_proposals = {}
             self.model.module.roi_heads.keep_stats = False
-            self.model_teacher.module.roi_heads.keep_stats = False
+            self.model_teacher.roi_heads.keep_stats = False
         else:
             self.model.roi_heads.keep_proposals = {}
             self.model.roi_heads.keep_stats = False
