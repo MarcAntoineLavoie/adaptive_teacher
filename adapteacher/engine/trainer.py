@@ -631,6 +631,12 @@ class ATeacherTrainer(DefaultTrainer):
             record_dict, _, _, _ = self.model(
                 label_data_q, branch="supervised")
 
+            if self.align_proposals:
+                # proposals_t = self.model.roi_heads.keep_proposals["supervised_target"]
+                loss_align = self.align_proposals_loss()
+                loss_align['loss_align'] *= 1e-12
+                record_dict.update(loss_align)
+
             # weight losses
             loss_dict = {}
             for key in record_dict.keys():
@@ -1475,7 +1481,11 @@ class ContrastLoss(nn.Module):
 
     def forward(self, logits):
         labels_s, feat_s = logits['supervised']
-        labels_t, feat_t = logits['supervised_target']
+        if 'supervised_target' in logits.keys():
+            labels_t, feat_t = logits['supervised_target']
+        else:
+            labels_t, feat_t = logits['supervised']
+
         if self.select == 'all':
             labels_s = torch.cat(labels_s)
             feat_s = torch.cat(feat_s)
