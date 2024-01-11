@@ -128,8 +128,8 @@ def build_detection_test_loader(cfg, dataset_name, mapper=None):
         if cfg.MODEL.LOAD_PROPOSALS
         else None,
     )
-    if 'foggy' in dataset_dicts[0]['file_name']:
-        dataset_dicts = [x for x in dataset_dicts if '0.02' in x['file_name']]
+    # if 'foggy' in dataset_dicts[0]['file_name']:
+    #     dataset_dicts = [x for x in dataset_dicts if '0.02' in x['file_name']]
     dataset = DatasetFromList(dataset_dicts)
     if mapper is None:
         mapper = DatasetMapper(cfg, False)

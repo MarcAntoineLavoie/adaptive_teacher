@@ -199,8 +199,8 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             pred_instances, ids_ = self.box_predictor.inference(predictions, proposals, unsup=unsup)
             for instance, proposal, ids in zip(pred_instances, proposals, ids_):
                 instance.rpn_score = proposal.objectness_logits[ids]
-                if self.keep_stats:
-                    instance.logits = box_features[ids,:]
+                # if self.keep_stats:
+                #     instance.logits = box_features[ids,:]
             del box_features
             return pred_instances, predictions
 
@@ -1070,15 +1070,19 @@ def intersect_self(dt_bbox, bbox_cov):
     return mean_IoU
 
 class ProjectionHead(nn.Module):
-    def __init__(self, feat_dim=1024, use_proj=True):
+    def __init__(self, feat_dim=1024, use_proj=True, normed=True):
         super(ProjectionHead, self).__init__()
+        self.normed = normed
         if use_proj:
             self.head = nn.Sequential(nn.Linear(feat_dim, feat_dim), nn.BatchNorm1d(feat_dim), nn.ReLU(), nn.Linear(feat_dim, feat_dim))
     
     def forward(self, x):
         out = self.head(x)
-        normed_out = nn.functional.normalize(out)
-        return normed_out
+        if self.normed:
+            normed_out = nn.functional.normalize(out)
+            return normed_out
+        else:
+            return out
 
 
 # import matplotlib.pyplot as plt
