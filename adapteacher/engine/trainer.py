@@ -382,13 +382,13 @@ class ATeacherTrainer(DefaultTrainer):
                     self.proj_head = self.model.module.roi_heads.box_predictor.proj_head
                 else:
                     self.proj_head = self.model.roi_heads.box_predictor.proj_head
-                temperature  = 0.07
+                temperature  = cfg.SEMISUPNET.ALIGN_PARAM
                 use_proj = True
                 # feat_dim = self.model_teacher.roi_heads
                 feat_dim = 512
                 n_labels = 9
                 select = 'all'
-                self.align_loss = ContrastLoss(self.proj_head, n_labels, select, temperature=temperature, scale=cfg.SEMISUPNET.ALIGN_WEIGHT)
+                self.align_loss = ContrastLoss(self.proj_head, n_labels, select, temperature=temperature, scale=cfg.SEMISUPNET.ALIGN_WEIGHT, base_temp=cfg.SEMISUPNET.ALIGN_PARAM_BASE)
 
     def resume_or_load(self, resume=True):
         """
@@ -912,12 +912,12 @@ class ATeacherTrainer(DefaultTrainer):
                 self.cfg, self.model_teacher)
             return self._last_eval_results_teacher
 
-        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-                   test_and_save_results_student))
+        # ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
+        #            test_and_save_results_student))
         ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
                    test_and_save_results_teacher))
-        # ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-                #    test_and_save_results_student))
+        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
+                   test_and_save_results_student))
 
         if comm.is_main_process():
             # run writers in the end, so that evaluation metrics are written
@@ -1469,8 +1469,71 @@ def inference_context(model):
 
 
 class ContrastLoss(nn.Module):
-    def __init__(self, proj_head, n_labels, select, temperature=0.07, intra_align=False, scale=1.0):
+    def __init__(self, proj_head, n_labels, select, temperature=0.07, intra_align=False, scale=1.0, base_temp=None):
         super(ContrastLoss, self).__init__()
+        self.proj_head = proj_head
+        self.n_labels = n_labels
+        self.select = select
+        self.temp = temperature
+        self.intra_align = intra_align
+        self.criterion = nn.CrossEntropyLoss()
+        self.scale = scale
+        if base_temp is None:
+            self.base_temp = self.temp
+        else:
+            self.base_temp = base_temp
+
+    def forward(self, logits):
+        labels_s, feat_s = logits['supervised']
+        if 'supervised_target' in logits.keys():
+            labels_t, feat_t = logits['supervised_target']
+        else:
+            labels_t, feat_t = logits['supervised']
+
+        if self.select == 'all':
+            labels_s = torch.cat(labels_s)
+            feat_s = torch.cat(feat_s)
+            nfeat_s = self.proj_head(feat_s)
+
+            labels_t = torch.cat(labels_t)
+            feat_t = torch.cat(feat_t)
+            nfeat_t = self.proj_head(feat_t)
+
+        # elif self.select == 'background':
+        #     labels_s = labels_s
+        #     feat_s = torch.cat(feat_s)
+        #     labels_t = torch.cat(labels_t)
+        #     feat_t = torch.cat(feat_t)
+
+        if self.intra_align:
+            feat_1 = torch.cat((feat_s, nfeat_t))
+            labels_1 = torch.cat((labels_s, labels_t))
+            feat_2 = torch.cat((feat_s, nfeat_t))
+            labels_2 = torch.cat((labels_s, labels_t))
+        else:
+            feat_1 = nfeat_s
+            labels_1 = labels_s
+            feat_2 = nfeat_t
+            labels_2 = labels_t
+        
+        logits = torch.matmul(feat_1, feat_2.T)/self.temp
+        targets = torch.eq(labels_1, labels_2.unsqueeze(1)).to(device=logits.device)
+        exp_logits = torch.exp(logits)
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)
+        mean_log_prob_pos = (targets * log_prob).sum(1) / targets.sum(1)
+        loss = -mean_log_prob_pos.mean() * self.scale * (self.temp / self.base_temp)
+       
+        # # compute mean of log-likelihood over positive
+        # mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
+        # log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)
+
+        # test = self.criterion()
+
+        return loss
+
+class OTLoss(nn.Module):
+    def __init__(self, proj_head, n_labels, select, temperature=0.07, intra_align=False, scale=1.0):
+        super(OTLoss, self).__init__()
         self.proj_head = proj_head
         self.n_labels = n_labels
         self.select = select
@@ -1526,6 +1589,7 @@ class ContrastLoss(nn.Module):
         # test = self.criterion()
 
         return loss
+
 
 # def temp():
 #     import matplotlib.pyplot as plt

@@ -7,7 +7,7 @@ _BASE_: "./Base-RCNN-C4.yaml"
 # OUTPUT_DIR: "output/at_scaled"
 # OUTPUT_DIR: "output/test_iou_select_080"
 OUTPUT_DIR: "output/test_v2_nom"
-# OUTPUT_DIR: "output/test_v2_iou70"
+# OUTPUT_DIR: "output/test_align_dgx"
 # OUTPUT_DIR: "output/test_v2_iou70_test"
 INPUT:
   CLEAN_DETECTIONS: False
@@ -83,21 +83,22 @@ SEMISUPNET:
   BBOX_THRESHOLD: 0.8
   # BBOX_THRESHOLD: 0.15
   TEACHER_UPDATE_ITER: 1
-  BURN_UP_STEP: 20000
-  # BURN_UP_STEP: 1
+  # BURN_UP_STEP: 20000
+  BURN_UP_STEP: 1
   EMA_KEEP_RATE: 0.9996
   UNSUP_LOSS_WEIGHT: 1.0
   SUP_LOSS_WEIGHT: 1.0
   DIS_TYPE: "vgg4" #["concate","p2","multi"]
   DOMAIN_ADV_INST: 0.0
   # DOMAIN_ADV_INST: 1.0
-  ALIGN_PROPOSALS: False
+  ALIGN_PROPOSALS: True
   # ALIGN_LOSS: "sinkhorn"
   ALIGN_LOSS: "contrast"
-  ALIGN_WEIGHT: 0.01
+  ALIGN_WEIGHT: 0.10
+  ALIGN_PARAM: 0.07
 TEST:
-  EVAL_PERIOD: 2500
-  # EVAL_PERIOD: 2
+  # EVAL_PERIOD: 2500
+  EVAL_PERIOD: 2
 
 
 
