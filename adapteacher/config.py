@@ -45,6 +45,8 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.ALIGN_WEIGHT = 0.0
     _C.SEMISUPNET.ALIGN_PARAM = 0.07
     _C.SEMISUPNET.ALIGN_PARAM_BASE = 0.07
+    _C.SEMISUPNET.ALIGN_INTRA = False
+    _C.SEMISUPNET.ALIGN_NORMED = False
 
     # dataloader
     # supervision level

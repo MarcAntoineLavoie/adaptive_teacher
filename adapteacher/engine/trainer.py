@@ -383,12 +383,9 @@ class ATeacherTrainer(DefaultTrainer):
                 else:
                     self.proj_head = self.model.roi_heads.box_predictor.proj_head
                 temperature  = cfg.SEMISUPNET.ALIGN_PARAM
-                use_proj = True
-                # feat_dim = self.model_teacher.roi_heads
-                feat_dim = 512
                 n_labels = 9
                 select = 'all'
-                self.align_loss = ContrastLoss(self.proj_head, n_labels, select, temperature=temperature, scale=cfg.SEMISUPNET.ALIGN_WEIGHT, base_temp=cfg.SEMISUPNET.ALIGN_PARAM_BASE)
+                self.align_loss = ContrastLoss(self.proj_head, n_labels, select, temperature=temperature, scale=cfg.SEMISUPNET.ALIGN_WEIGHT, base_temp=cfg.SEMISUPNET.ALIGN_PARAM_BASE, intra_align=cfg.SEMISUPNET.ALIGN_INTRA)
 
     def resume_or_load(self, resume=True):
         """
@@ -912,12 +909,12 @@ class ATeacherTrainer(DefaultTrainer):
                 self.cfg, self.model_teacher)
             return self._last_eval_results_teacher
 
-        # ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-        #            test_and_save_results_student))
-        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-                   test_and_save_results_teacher))
         ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
                    test_and_save_results_student))
+        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
+                   test_and_save_results_teacher))
+        # ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
+                #    test_and_save_results_student))
 
         if comm.is_main_process():
             # run writers in the end, so that evaluation metrics are written
@@ -1532,7 +1529,7 @@ class ContrastLoss(nn.Module):
         return loss
 
 class OTLoss(nn.Module):
-    def __init__(self, proj_head, n_labels, select, temperature=0.07, intra_align=False, scale=1.0):
+    def __init__(self, proj_head, n_labels, select, temperature=0.07, intra_align=False, scale=1.0, loss_func=None):
         super(OTLoss, self).__init__()
         self.proj_head = proj_head
         self.n_labels = n_labels
@@ -1541,6 +1538,7 @@ class OTLoss(nn.Module):
         self.intra_align = intra_align
         self.criterion = nn.CrossEntropyLoss()
         self.scale = scale
+        self.loss_func = loss_func
 
     def forward(self, logits):
         labels_s, feat_s = logits['supervised']

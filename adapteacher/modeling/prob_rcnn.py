@@ -395,6 +395,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         scale_expo_iou=0.0,
         domain_invariant_inst=0.0,
         align_proposals=False,
+        normed_proj=False,
         burnup_steps=20000,
     ):
         """
@@ -489,7 +490,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         if self.align_proposals:
             feat_dim = 512
             use_proj = True
-            self.proj_head = ProjectionHead(feat_dim=feat_dim, use_proj=use_proj)
+            self.proj_head = ProjectionHead(feat_dim=feat_dim, use_proj=use_proj, normed=normed_proj)
 
     @classmethod
     def from_config(cls,
@@ -533,6 +534,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "scale_expo_iou": cfg.MODEL.PROBABILISTIC_MODELING.SCALE_EXPO_IOU,
             "domain_invariant_inst": cfg.SEMISUPNET.DOMAIN_ADV_INST,
             "align_proposals": cfg.SEMISUPNET.ALIGN_PROPOSALS,
+            "normed_proj": cfg.SEMISUPNET.ALIGN_NORMED,
             "burnup_steps": cfg.SEMISUPNET.BURN_UP_STEP,
         }
 
