@@ -55,12 +55,17 @@ MODEL:
         # NAME: 'negative_log_likelihood'
         COVARIANCE_TYPE: 'diagonal' # One of the following: 'full', 'diagonal'
         NUM_SAMPLES: 1000
+        # NAME: 'energy_loss2'
+        # # NAME: 'negative_log_likelihood'
+        # COVARIANCE_TYPE: 'diagonal' # One of the following: 'full', 'diagonal'
+        # NUM_SAMPLES: 50
     ANNEALING_STEP: 10000
     PROB_IOU: True
     SELECT_IOU: False
     SCALE_LOSS: False
     SCALE_EXPO_SCORE: 1.0
     SCALE_EXPO_IOU: 1.0
+    GT_INJECT_COV_WEIGHT: 1.0
 SOLVER:
   LR_SCHEDULER_NAME: "WarmupTwoStageMultiStepLR"
   STEPS: (60000, 80000, 90000, 360000)

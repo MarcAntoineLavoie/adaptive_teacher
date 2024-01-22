@@ -209,14 +209,16 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         self, proposals: List[Instances], targets: List[Instances], branch: str = ""
     ) -> List[Instances]:
         gt_boxes = [x.gt_boxes for x in targets]
+        is_gt = [torch.zeros(len(x)) for x in proposals]
         if self.proposal_append_gt:
             proposals = add_ground_truth_to_proposals(gt_boxes, proposals)
+            is_gt = [torch.cat((y,torch.ones(len(x)-len(y)))) for x, y in zip(proposals, is_gt)]
 
         proposals_with_gt = []
 
         num_fg_samples = []
         num_bg_samples = []
-        for proposals_per_image, targets_per_image in zip(proposals, targets):
+        for proposals_per_image, targets_per_image, from_gt in zip(proposals, targets, is_gt):
             has_gt = len(targets_per_image) > 0
             match_quality_matrix = pairwise_iou(
                 targets_per_image.gt_boxes, proposals_per_image.proposal_boxes
@@ -231,6 +233,8 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
             if has_gt:
                 sampled_targets = matched_idxs[sampled_idxs]
+                proposal_type = from_gt[sampled_idxs].to(device=proposals_per_image.gt_classes.device) + (proposals_per_image.gt_classes < max(gt_classes)).long()
+                proposals_per_image.proposal_type = proposal_type
                 for (trg_name, trg_value) in targets_per_image.get_fields().items():
                     if trg_name.startswith("gt_") and not proposals_per_image.has(
                         trg_name
@@ -397,6 +401,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         align_proposals=False,
         normed_proj=False,
         burnup_steps=20000,
+        gt_inject_cov_weight=1.0,
     ):
         """
         NOTE: this interface is experimental.
@@ -487,6 +492,8 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         self.align_proposals = align_proposals
         self.burnup_steps = burnup_steps
 
+        self.gt_inject_cov_weight = gt_inject_cov_weight
+
         if self.align_proposals:
             feat_dim = 512
             use_proj = True
@@ -536,6 +543,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "align_proposals": cfg.SEMISUPNET.ALIGN_PROPOSALS,
             "normed_proj": cfg.SEMISUPNET.ALIGN_NORMED,
             "burnup_steps": cfg.SEMISUPNET.BURN_UP_STEP,
+            "gt_inject_cov_weight": cfg.MODEL.PROBABILISTIC_MODELING.GT_INJECT_COV_WEIGHT,
         }
 
     def forward(self, x):
@@ -597,6 +605,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                 gt_boxes = box_type.cat([p.gt_boxes for p in proposals])
                 assert proposals[0].has("gt_classes")
                 gt_classes = cat([p.gt_classes for p in proposals], dim=0)
+                proposal_type = cat([p.proposal_type for p in proposals], dim=0)
         else:
             proposals_boxes = Boxes(
                 torch.zeros(
@@ -668,6 +677,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                     fg_gt_classes[:, None] + torch.arange(box_dim, device=device)
                 gt_covar_class_cols = self.bbox_cov_dims * \
                     fg_gt_classes[:, None] + torch.arange(self.bbox_cov_dims, device=device)
+                gt_proposal_types = proposal_type[fg_inds]
 
             loss_reg_normalizer = gt_classes.numel()
 
@@ -755,20 +765,22 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                     distributions_samples_2 = distributions_samples[1:self.bbox_cov_num_samples + 1, :, :]
 
                     # Compute energy score
-                    loss_covariance_regularize = - smooth_l1_loss(
+                    weight_mat = torch.where(gt_proposal_types==2,self.gt_inject_cov_weight,1.0).unsqueeze(0).unsqueeze(-1)
+
+                    loss_covariance_regularize = - (weight_mat * smooth_l1_loss(
                         distributions_samples_1,
                         distributions_samples_2,
                         beta=self.smooth_l1_beta_prob,
-                        reduction="sum") / self.bbox_cov_num_samples   # Second term
+                        reduction="none")).sum() / self.bbox_cov_num_samples   # Second term
 
                     gt_proposals_delta_samples = torch.repeat_interleave(
                         gt_proposals_delta.unsqueeze(0), self.bbox_cov_num_samples, dim=0)
 
-                    loss_first_moment_match = 2.0 * smooth_l1_loss(
+                    loss_first_moment_match = (weight_mat * 2.0 * smooth_l1_loss(
                         distributions_samples_1,
                         gt_proposals_delta_samples,
                         beta=self.smooth_l1_beta_prob,
-                        reduction="sum") / self.bbox_cov_num_samples  # First term
+                        reduction="none")).sum() / self.bbox_cov_num_samples  # First term
 
                     # Final Loss
                     loss_box_reg = (

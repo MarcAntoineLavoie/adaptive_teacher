@@ -501,6 +501,8 @@ class ATeacherTrainer(DefaultTrainer):
             ]
         elif proposal_type == "roih":
             valid_map = proposal_bbox_inst.scores > thres
+            # valid_map2 = (proposal_bbox_inst.iou > thres) * (proposal_bbox_inst.rpn_score > 0.3)
+            # overlap = sum(valid_map==valid_map2)**2/(sum(valid_map)*sum(valid_map))
 
             # create instances containing boxes and gt_classes
             image_shape = proposal_bbox_inst.image_size
@@ -517,10 +519,12 @@ class ATeacherTrainer(DefaultTrainer):
             if 'iou' in proposal_bbox_inst._fields.keys():
                 new_proposal_inst.gt_iou = proposal_bbox_inst.iou[valid_map]
 
-        return new_proposal_inst
+        return new_proposal_inst, 0
     
     def threshold_self(self, proposal_bbox_inst, thres=0.7):
         valid_map = (proposal_bbox_inst.iou > thres) * (proposal_bbox_inst.rpn_score > 0.3)
+        valid_map2 = proposal_bbox_inst.scores > 0.8
+        overlap = sum(torch.logical_and(valid_map, valid_map2))/len(proposal_bbox_inst)
 
         # create instances containing boxes and gt_classes
         image_shape = proposal_bbox_inst.image_size
@@ -537,7 +541,7 @@ class ATeacherTrainer(DefaultTrainer):
         if 'iou' in proposal_bbox_inst._fields.keys():
             new_proposal_inst.gt_iou = proposal_bbox_inst.iou[valid_map]
 
-        return new_proposal_inst
+        return new_proposal_inst, overlap
 
     def process_pseudo_label(
         self, proposals_rpn_unsup_k, cur_threshold, proposal_type, psedo_label_method=""
@@ -548,13 +552,13 @@ class ATeacherTrainer(DefaultTrainer):
             # thresholding
             if self.select_iou:
                 if proposal_type == 'roih':
-                    proposal_bbox_inst = self.threshold_self(proposal_bbox_inst, thres=cur_threshold,)
+                    proposal_bbox_inst, overlap = self.threshold_self(proposal_bbox_inst, thres=cur_threshold,)
                 else:
-                    proposal_bbox_inst = self.threshold_bbox(
+                    proposal_bbox_inst, overlap = self.threshold_bbox(
                     proposal_bbox_inst, thres=cur_threshold, proposal_type=proposal_type
                 )
             elif psedo_label_method == "thresholding":
-                proposal_bbox_inst = self.threshold_bbox(
+                proposal_bbox_inst, overlap = self.threshold_bbox(
                     proposal_bbox_inst, thres=cur_threshold, proposal_type=proposal_type
                 )
             else:
@@ -562,7 +566,7 @@ class ATeacherTrainer(DefaultTrainer):
             num_proposal_output += len(proposal_bbox_inst)
             list_instances.append(proposal_bbox_inst)
         num_proposal_output = num_proposal_output / len(proposals_rpn_unsup_k)
-        return list_instances, num_proposal_output
+        return list_instances, num_proposal_output, overlap
 
     def remove_label(self, label_data):
         for label_datum in label_data:
@@ -692,6 +696,7 @@ class ATeacherTrainer(DefaultTrainer):
             (
                 pesudo_proposals_rpn_unsup_k,
                 nun_pseudo_bbox_rpn,
+                _
             ) = self.process_pseudo_label(
                 proposals_rpn_unsup_k, cur_threshold, "rpn", "thresholding"
             )
@@ -700,10 +705,11 @@ class ATeacherTrainer(DefaultTrainer):
 
             joint_proposal_dict["proposals_pseudo_rpn"] = pesudo_proposals_rpn_unsup_k
             # Pseudo_labeling for ROI head (bbox location/objectness)
-            pesudo_proposals_roih_unsup_k, _ = self.process_pseudo_label(
+            pesudo_proposals_roih_unsup_k, _, overlap = self.process_pseudo_label(
                 proposals_roih_unsup_k, cur_threshold, "roih", "thresholding"
             )
             joint_proposal_dict["proposals_pseudo_roih"] = pesudo_proposals_roih_unsup_k
+            record_dict.update({'iou_overlap':overlap})
 
             # 3. add pseudo-label to unlabeled data
 
@@ -914,7 +920,7 @@ class ATeacherTrainer(DefaultTrainer):
         ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
                    test_and_save_results_teacher))
         # ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-                #    test_and_save_results_student))
+        #            test_and_save_results_student))
 
         if comm.is_main_process():
             # run writers in the end, so that evaluation metrics are written
