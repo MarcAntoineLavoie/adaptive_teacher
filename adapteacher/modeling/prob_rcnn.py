@@ -256,6 +256,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
                     targets_per_image.gt_boxes.tensor.new_zeros((len(sampled_idxs), 4))
                 )
                 proposals_per_image.gt_boxes = gt_boxes
+                proposals_per_image.proposal_type = torch.zeros(len(sampled_idxs)).to(device=proposals_per_image.gt_boxes.device)
 
             num_bg_samples.append((gt_classes == self.num_classes).sum().item())
             num_fg_samples.append(gt_classes.numel() - num_bg_samples[-1])

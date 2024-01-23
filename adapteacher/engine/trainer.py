@@ -1509,9 +1509,9 @@ class ContrastLoss(nn.Module):
         #     feat_t = torch.cat(feat_t)
 
         if self.intra_align:
-            feat_1 = torch.cat((feat_s, nfeat_t))
+            feat_1 = torch.cat((nfeat_s, nfeat_t))
             labels_1 = torch.cat((labels_s, labels_t))
-            feat_2 = torch.cat((feat_s, nfeat_t))
+            feat_2 = torch.cat((nfeat_s, nfeat_t))
             labels_2 = torch.cat((labels_s, labels_t))
         else:
             feat_1 = nfeat_s
