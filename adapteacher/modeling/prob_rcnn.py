@@ -34,6 +34,7 @@ from detectron2.layers import ShapeSpec, batched_nms, cat, cross_entropy, nonzer
 from adapteacher.modeling.meta_arch.rcnn import FCDiscriminator_inst, grad_reverse
 
 import random
+import geomloss
 
 @ROI_HEADS_REGISTRY.register()
 class ProbROIHeadsPseudoLab(StandardROIHeads):
@@ -171,7 +172,10 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             self.process_proposals(box_features, proposals, branch)
             # self.keep_proposals[branch] = [predictions[0], cat([p.gt_classes for p in proposals], dim=0)]
         box_features = self.box_head(box_features)
-        predictions = self.box_predictor(box_features)
+        if self.box_predictor.compute_bbox_cov and branch == 'supervised':
+            predictions = self.box_predictor(box_features, proposals=proposals)
+        else:
+            predictions = self.box_predictor(box_features)
 
         
         # if self.keep_stats:
@@ -233,7 +237,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
             if has_gt:
                 sampled_targets = matched_idxs[sampled_idxs]
-                proposal_type = from_gt[sampled_idxs].to(device=proposals_per_image.gt_classes.device) + (proposals_per_image.gt_classes < max(gt_classes)).long()
+                proposal_type = from_gt.to(device=proposals_per_image.gt_classes.device)[sampled_idxs] + (proposals_per_image.gt_classes < max(gt_classes)).long()
                 proposals_per_image.proposal_type = proposal_type
                 for (trg_name, trg_value) in targets_per_image.get_fields().items():
                     if trg_name.startswith("gt_") and not proposals_per_image.has(
@@ -465,13 +469,20 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         #     nn.init.normal_(self.cls_var.weight, std=0.0001)
         #     nn.init.constant_(self.cls_var.bias, 0)
 
-        if self.compute_bbox_cov:
+        if self.compute_bbox_cov and self.bbox_cov_loss != 'energy_loss2':
             self.bbox_cov = Linear(
                 input_size,
                 num_bbox_reg_classes *
                 bbox_cov_dims)
             nn.init.normal_(self.bbox_cov.weight, std=0.0001)
             nn.init.constant_(self.bbox_cov.bias, 0)
+        elif self.compute_bbox_cov and self.bbox_cov_loss == 'energy_loss2':
+            self.bbox_prob_gen = Linear(
+                input_size + bbox_cov_dims,
+                bbox_cov_num_samples * bbox_cov_dims)
+            nn.init.normal_(self.bbox_prob_gen.weight, std=0.0001)
+            nn.init.constant_(self.bbox_prob_gen.bias, 0)
+            self.cov_loss = geomloss.SamplesLoss(loss='energy')
 
         self.box2box_transform = box2box_transform
         self.smooth_l1_beta = smooth_l1_beta
@@ -546,7 +557,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "gt_inject_cov_weight": cfg.MODEL.PROBABILISTIC_MODELING.GT_INJECT_COV_WEIGHT,
         }
 
-    def forward(self, x):
+    def forward(self, x, proposals=None):
         """
         Returns:
             Tensor: Nx(K+1) logits for each box
@@ -566,11 +577,21 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             score_vars = None
 
         # Compute box covariance if needed
-        if self.compute_bbox_cov:
+        if self.compute_bbox_cov and self.bbox_cov_loss != "energy_loss2":
             proposal_covs = self.bbox_cov(x)
             if self.bbox_cov_loss == 'samplenet':
                 proposal_covs = proposal_covs.reshape(proposal_covs.shape[0], -1, 320)
                 proposal_deltas = proposal_covs.mean(axis=1)
+        elif self.compute_bbox_cov and self.bbox_cov_loss == "energy_loss2":
+            proposal_types = cat([p.proposal_type for p in proposals], dim=0)
+            fg_idxs = torch.nonzero(proposal_types > 0, as_tuple=True)[0]
+            proposal_gt = cat([p.gt_classes for p in proposals], dim=0)
+            fg_gt_classes = proposal_gt[fg_idxs]
+            box_cols = self.bbox_cov_dims * fg_gt_classes[:, None] + torch.arange(self.bbox_cov_dims).to(device=fg_gt_classes[:, None].device)
+            props = proposal_deltas[fg_idxs[:, None],box_cols]
+            x2 = cat((x[fg_idxs,:], props), dim=1)
+            proposal_covs = self.bbox_prob_gen(x2)
+            
         else:
             proposal_covs = None
 
@@ -685,7 +706,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                                                                 None], gt_class_cols]
             gt_proposals_delta = gt_proposal_deltas[fg_inds]
 
-            if self.compute_bbox_cov and len(fg_inds) and not unsup:
+            if self.compute_bbox_cov and len(fg_inds) and not unsup and "2" not in self.bbox_cov_loss:
                 pred_proposal_covs = pred_proposal_covs[fg_inds[:,
                                                                 None], gt_covar_class_cols]
                 pred_proposal_covs = clamp_log_variance(pred_proposal_covs)
@@ -805,6 +826,27 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
                 loss_box_reg = (1.0 - probabilistic_loss_weight) * \
                     standard_regression_loss + probabilistic_loss_weight * loss_box_reg
+
+            elif self.compute_bbox_cov and len(fg_inds) and not unsup and "2" in self.bbox_cov_loss:
+                prob_boxes = cat((pred_proposal_deltas, pred_proposal_covs), dim=1)
+                
+                loss_box_reg = self.cov_loss(prob_boxes.reshape(fg_inds.shape[0],-1,4), gt_proposals_delta.unsqueeze(1)).mean() * 0.1
+
+                # Perform loss annealing. Not really essential in Generalized-RCNN case, but good practice for more
+                # elaborate regression variance losses.
+                standard_regression_loss = smooth_l1_loss(pred_proposal_deltas,
+                                                          gt_proposals_delta,
+                                                          self.smooth_l1_beta,
+                                                          reduction="sum",)
+                standard_regression_loss = standard_regression_loss / loss_reg_normalizer
+
+                # print(current_step)
+                probabilistic_loss_weight = get_probabilistic_loss_weight(
+                    current_step, self.annealing_step)
+
+                loss_box_reg = (1.0 - probabilistic_loss_weight) * \
+                    standard_regression_loss + probabilistic_loss_weight * loss_box_reg
+
 
             elif unsup and self.use_scale and all(["gt_iou" in props._fields.keys() for props in proposals]):
                 loss_box_temp = smooth_l1_loss(pred_proposal_deltas,
