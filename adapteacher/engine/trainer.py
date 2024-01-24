@@ -373,18 +373,17 @@ class ATeacherTrainer(DefaultTrainer):
                 self.model.roi_heads.current_proposals = {}
             self.model_teacher.roi_heads.align_proposals = self.align_proposals
             self.model_teacher.roi_heads.current_proposals = {}
-            if cfg.SEMISUPNET.ALIGN_LOSS == 'sinkhorn':
-                sinkhorn_blur = 0.05
-                sinkhorn_p_norm = 2
-                self.align_loss = geomloss.SamplesLoss(loss="sinkhorn", p=sinkhorn_p_norm, blur=sinkhorn_blur, scaling=0.1)
+            if 'module' in self.model.__dict__['_modules']:
+                self.proj_head = self.model.module.roi_heads.box_predictor.proj_head
+            else:
+                self.proj_head = self.model.roi_heads.box_predictor.proj_head
+            temperature  = cfg.SEMISUPNET.ALIGN_PARAM
+            n_labels = 9
+            select = 'all'
+            if cfg.SEMISUPNET.ALIGN_LOSS == 'MMD':
+                loss_func = geomloss.SamplesLoss(loss='energy')
+                self.align_loss = SinkLoss(loss_func, self.proj_head, n_labels, select, temperature=temperature, scale=cfg.SEMISUPNET.ALIGN_WEIGHT, base_temp=cfg.SEMISUPNET.ALIGN_PARAM_BASE, intra_align=cfg.SEMISUPNET.ALIGN_INTRA)
             elif cfg.SEMISUPNET.ALIGN_LOSS == 'contrast':
-                if 'module' in self.model.__dict__['_modules']:
-                    self.proj_head = self.model.module.roi_heads.box_predictor.proj_head
-                else:
-                    self.proj_head = self.model.roi_heads.box_predictor.proj_head
-                temperature  = cfg.SEMISUPNET.ALIGN_PARAM
-                n_labels = 9
-                select = 'all'
                 self.align_loss = ContrastLoss(self.proj_head, n_labels, select, temperature=temperature, scale=cfg.SEMISUPNET.ALIGN_WEIGHT, base_temp=cfg.SEMISUPNET.ALIGN_PARAM_BASE, intra_align=cfg.SEMISUPNET.ALIGN_INTRA)
 
     def resume_or_load(self, resume=True):
@@ -524,7 +523,7 @@ class ATeacherTrainer(DefaultTrainer):
     def threshold_self(self, proposal_bbox_inst, thres=0.7):
         valid_map = (proposal_bbox_inst.iou > thres) * (proposal_bbox_inst.rpn_score > 0.3)
         valid_map2 = proposal_bbox_inst.scores > 0.8
-        overlap = sum(torch.logical_and(valid_map, valid_map2))/len(proposal_bbox_inst)
+        overlap = sum(torch.logical_and(valid_map, valid_map2))/len(proposal_bbox_inst+1e-12)
 
         # create instances containing boxes and gt_classes
         image_shape = proposal_bbox_inst.image_size
@@ -1523,7 +1522,7 @@ class ContrastLoss(nn.Module):
         targets = torch.eq(labels_1, labels_2.unsqueeze(1)).to(device=logits.device)
         exp_logits = torch.exp(logits)
         log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)
-        mean_log_prob_pos = (targets * log_prob).sum(1) / targets.sum(1)
+        mean_log_prob_pos = (targets * log_prob).sum(1) / (targets.sum(1) + 1e-12)
         loss = -mean_log_prob_pos.mean() * self.scale * (self.temp / self.base_temp)
        
         # # compute mean of log-likelihood over positive
@@ -1534,9 +1533,9 @@ class ContrastLoss(nn.Module):
 
         return loss
 
-class OTLoss(nn.Module):
+class SinkLoss(nn.Module):
     def __init__(self, proj_head, n_labels, select, temperature=0.07, intra_align=False, scale=1.0, loss_func=None):
-        super(OTLoss, self).__init__()
+        super(SinkLoss, self).__init__()
         self.proj_head = proj_head
         self.n_labels = n_labels
         self.select = select
@@ -1583,7 +1582,7 @@ class OTLoss(nn.Module):
         targets = torch.eq(labels_1, labels_2.unsqueeze(1)).to(device=logits.device)
         exp_logits = torch.exp(logits)
         log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)
-        mean_log_prob_pos = (targets * log_prob).sum(1) / targets.sum(1)
+        mean_log_prob_pos = (targets * log_prob).sum(1) / (targets.sum(1) + 1e-12)
         loss = -mean_log_prob_pos.mean() * self.scale
        
         # # compute mean of log-likelihood over positive
