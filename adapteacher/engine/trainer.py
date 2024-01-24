@@ -634,7 +634,8 @@ class ATeacherTrainer(DefaultTrainer):
             if self.align_proposals:
                 # proposals_t = self.model.roi_heads.keep_proposals["supervised_target"]
                 loss_align = self.align_proposals_loss()
-                loss_align['loss_align'] *= 1e-12
+                if not self.cfg.SEMISUPNET.ALIGN_INTRA:
+                    loss_align['loss_align'] *= 1e-12
                 record_dict.update(loss_align)
 
             # weight losses
