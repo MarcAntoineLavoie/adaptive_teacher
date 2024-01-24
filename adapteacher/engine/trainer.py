@@ -523,7 +523,7 @@ class ATeacherTrainer(DefaultTrainer):
     def threshold_self(self, proposal_bbox_inst, thres=0.7):
         valid_map = (proposal_bbox_inst.iou > thres) * (proposal_bbox_inst.rpn_score > 0.3)
         valid_map2 = proposal_bbox_inst.scores > 0.8
-        overlap = sum(torch.logical_and(valid_map, valid_map2))/len(proposal_bbox_inst+1e-12)
+        overlap = sum(torch.logical_and(valid_map, valid_map2))/(len(proposal_bbox_inst)+1e-12)
 
         # create instances containing boxes and gt_classes
         image_shape = proposal_bbox_inst.image_size
