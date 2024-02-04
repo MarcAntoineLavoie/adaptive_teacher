@@ -14,7 +14,7 @@ INPUT:
   MAX_OCCLUSION: 0.5
   CROP:
     ENABLED: True
-  MIN_SIZE_TRAIN: (568,)
+  MIN_SIZE_TRAIN: (550,)
 MODEL:
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
   META_ARCHITECTURE: "ProbDATwoStagePseudoLabGeneralizedRCNN"
