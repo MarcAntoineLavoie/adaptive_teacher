@@ -364,27 +364,37 @@ class ATeacherTrainer(DefaultTrainer):
         self.align_proposals = cfg.SEMISUPNET.ALIGN_PROPOSALS
         if self.align_proposals:
             if 'module' in self.model.__dict__['_modules']:
-                self.model.module.roi_heads.build_queues(n_classes=8, n_samples=200, feat_dim=512)
-                self.model.module.roi_heads.align_proposals = self.align_proposals
-                self.model.module.roi_heads.current_proposals = {}
+                model_student = self.model.module
             else:
-                self.model.roi_heads.build_queues(n_classes=8, n_samples=200, feat_dim=512)
-                self.model.roi_heads.align_proposals = self.align_proposals
-                self.model.roi_heads.current_proposals = {}
+                model_student = self.model
+
+            if cfg.SEMISUPNET.ALIGN_USE_BG:
+                n_labels = 9
+            else:
+                n_labels = 8
+            model_student.roi_heads.build_queues(n_classes=n_labels, n_samples=200, feat_dim=512, base_count=cfg.SEMISUPNET.ALIGN_BASE_COUNT)
+            model_student.roi_heads.align_proposals = self.align_proposals
+            model_student.roi_heads.current_proposals = {}
+            model_student.roi_heads.use_bg = cfg.SEMISUPNET.ALIGN_USE_BG
+            model_student.roi_heads.sampling = cfg.SEMISUPNET.ALIGN_SUBSAMPLING
+            model_student.roi_heads.points_per_proposals = cfg.SEMISUPNET.ALIGN_POINTS_PER_PROPOSALS
+
+            self.proj_head = model_student.roi_heads.box_predictor.proj_head
+
             self.model_teacher.roi_heads.align_proposals = self.align_proposals
             self.model_teacher.roi_heads.current_proposals = {}
-            if 'module' in self.model.__dict__['_modules']:
-                self.proj_head = self.model.module.roi_heads.box_predictor.proj_head
-            else:
-                self.proj_head = self.model.roi_heads.box_predictor.proj_head
+
             temperature  = cfg.SEMISUPNET.ALIGN_PARAM
             n_labels = 9
             select = 'all'
             if cfg.SEMISUPNET.ALIGN_LOSS == 'MMD':
                 loss_func = geomloss.SamplesLoss(loss='energy')
-                self.align_loss = SinkLoss(loss_func, self.proj_head, n_labels, select, temperature=temperature, scale=cfg.SEMISUPNET.ALIGN_WEIGHT, base_temp=cfg.SEMISUPNET.ALIGN_PARAM_BASE, intra_align=cfg.SEMISUPNET.ALIGN_INTRA)
+                self.align_loss = SinkLoss(self.proj_head, loss_func=loss_func, scale=cfg.SEMISUPNET.ALIGN_WEIGHT, intra_align=cfg.SEMISUPNET.ALIGN_INTRA)
             elif cfg.SEMISUPNET.ALIGN_LOSS == 'contrast':
-                self.align_loss = ContrastLoss(self.proj_head, n_labels, select, temperature=temperature, scale=cfg.SEMISUPNET.ALIGN_WEIGHT, base_temp=cfg.SEMISUPNET.ALIGN_PARAM_BASE, intra_align=cfg.SEMISUPNET.ALIGN_INTRA)
+                self.align_loss = ContrastLoss(self.proj_head, n_labels, select, temperature=temperature, scale=cfg.SEMISUPNET.ALIGN_WEIGHT,
+                                                base_temp=cfg.SEMISUPNET.ALIGN_PARAM_BASE, intra_align=cfg.SEMISUPNET.ALIGN_INTRA,
+                                                scale_count=cfg.SEMISUPNET.ALIGN_SCALE_COUNT)
+            self.use_gt_proposals = cfg.SEMISUPNET.USE_GT_PROPOSALS
 
     def resume_or_load(self, resume=True):
         """
@@ -666,7 +676,8 @@ class ATeacherTrainer(DefaultTrainer):
             
 
             #  0. remove unlabeled data labels
-            unlabel_data_q = self.remove_label(unlabel_data_q)
+            if not self.use_gt_proposals:
+                unlabel_data_q = self.remove_label(unlabel_data_q)
             unlabel_data_k = self.remove_label(unlabel_data_k)
 
             #  1. generate the pseudo-label using teacher model
@@ -713,9 +724,10 @@ class ATeacherTrainer(DefaultTrainer):
 
             # 3. add pseudo-label to unlabeled data
 
-            unlabel_data_q = self.add_label(
-                unlabel_data_q, joint_proposal_dict["proposals_pseudo_roih"]
-            )
+            if not self.use_gt_proposals:
+                unlabel_data_q = self.add_label(
+                    unlabel_data_q, joint_proposal_dict["proposals_pseudo_roih"]
+                )
             unlabel_data_k = self.add_label(
                 unlabel_data_k, joint_proposal_dict["proposals_pseudo_roih"]
             )
@@ -1472,7 +1484,7 @@ def inference_context(model):
 
 
 class ContrastLoss(nn.Module):
-    def __init__(self, proj_head, n_labels, select, temperature=0.07, intra_align=False, scale=1.0, base_temp=None):
+    def __init__(self, proj_head, n_labels, select, temperature=0.07, intra_align=False, scale=1.0, base_temp=None, scale_count=False):
         super(ContrastLoss, self).__init__()
         self.proj_head = proj_head
         self.n_labels = n_labels
@@ -1485,6 +1497,7 @@ class ContrastLoss(nn.Module):
             self.base_temp = self.temp
         else:
             self.base_temp = base_temp
+        self.scale_count = scale_count
 
     def forward(self, logits):
         labels_s, feat_s = logits['supervised']
@@ -1513,14 +1526,16 @@ class ContrastLoss(nn.Module):
             labels_1 = torch.cat((labels_s, labels_t))
             feat_2 = torch.cat((nfeat_s, nfeat_t))
             labels_2 = torch.cat((labels_s, labels_t))
+            # if self.scale_count:
+
         else:
             feat_1 = nfeat_s
             labels_1 = labels_s
             feat_2 = nfeat_t
             labels_2 = labels_t
         
-        logits = torch.matmul(feat_1, feat_2.T)/self.temp
-        targets = torch.eq(labels_1, labels_2.unsqueeze(1)).to(device=logits.device)
+        logits = torch.matmul(feat_2, feat_1.T)/self.temp
+        targets = torch.eq(labels_2, labels_1.unsqueeze(1)).to(device=logits.device)
         exp_logits = torch.exp(logits)
         log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)
         mean_log_prob_pos = (targets * log_prob).sum(1) / (targets.sum(1) + 1e-12)
@@ -1535,16 +1550,13 @@ class ContrastLoss(nn.Module):
         return loss
 
 class SinkLoss(nn.Module):
-    def __init__(self, proj_head, n_labels, select, temperature=0.07, intra_align=False, scale=1.0, loss_func=None):
+    def __init__(self, proj_head, intra_align=False, scale=1.0, loss_func=None):
         super(SinkLoss, self).__init__()
         self.proj_head = proj_head
-        self.n_labels = n_labels
-        self.select = select
-        self.temp = temperature
         self.intra_align = intra_align
-        self.criterion = nn.CrossEntropyLoss()
         self.scale = scale
         self.loss_func = loss_func
+        self.select = "all"
 
     def forward(self, logits):
         labels_s, feat_s = logits['supervised']
@@ -1562,38 +1574,96 @@ class SinkLoss(nn.Module):
             feat_t = torch.cat(feat_t)
             nfeat_t = self.proj_head(feat_t)
 
-        # elif self.select == 'background':
-        #     labels_s = labels_s
-        #     feat_s = torch.cat(feat_s)
-        #     labels_t = torch.cat(labels_t)
-        #     feat_t = torch.cat(feat_t)
+        n_classes = len(logits['supervised'][0])
+        losses = []
+        for i in range(n_classes):
+            ids_t = torch.where(labels_t == i)[0]
+            ids_sp = torch.where(labels_s == i)[0]
+            ids_sn = torch.where(labels_s != i)[0]
+            loss_i = self.loss_func(nfeat_t[ids_t,:],nfeat_s[ids_sp, :]) - self.loss_func(nfeat_t[ids_t,:],nfeat_s[ids_sn, :])
+            # losses.append(torch.where(loss_i>0, loss_i, 0))
+            losses.append(loss_i)
 
-        if self.intra_align:
-            feat_1 = torch.cat((feat_s, nfeat_t))
-            labels_1 = torch.cat((labels_s, labels_t))
-            feat_2 = torch.cat((feat_s, nfeat_t))
-            labels_2 = torch.cat((labels_s, labels_t))
-        else:
-            feat_1 = nfeat_s
-            labels_1 = labels_s
-            feat_2 = nfeat_t
-            labels_2 = labels_t
-        
-        logits = torch.matmul(feat_1, feat_2.T)/self.temp
-        targets = torch.eq(labels_1, labels_2.unsqueeze(1)).to(device=logits.device)
-        exp_logits = torch.exp(logits)
-        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)
-        mean_log_prob_pos = (targets * log_prob).sum(1) / (targets.sum(1) + 1e-12)
-        loss = -mean_log_prob_pos.mean() * self.scale
+        loss = sum(losses)/len(losses)*self.scale
        
+        return loss
+
         # # compute mean of log-likelihood over positive
         # mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
         # log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)
 
         # test = self.criterion()
 
-        return loss
+        # vals = []
+        # intra_source = torch.matmul(feat_1, feat_1.T).detach().cpu() - torch.eye(1600)
+        # intra_target = torch.matmul(feat_2, feat_2.T).detach().cpu() - torch.eye(1600)
+        # inter = torch.matmul(feat_1, feat_2.T).detach().cpu()
+        # labels_source = [labels_1[intra_source.max(dim=0)[1][200*i:200+200*i]] for i in range(8)]
+        # labels_target = [labels_2[intra_target.max(dim=0)[1][200*i:200+200*i]] for i in range(8)]
+        # labels_inter = [labels_1[inter.max(dim=0)[1][200*i:200+200*i]] for i in range(8)]
 
+        # order = [7,4,2,6,0,1,5,3]
+        # import numpy as np
+
+        # tols_source = np.array([intra_source[200*i:200+200*i, 200*i:200+200*i].sum()/199/200 for i in range(8)])[order]
+        # tols_target = np.array([intra_target[200*i:200+200*i, 200*i:200+200*i].sum()/199/200 for i in range(8)])[order]
+        # tols_inter = np.array([inter[200*i:200+200*i, 200*i:200+200*i].sum()/199/200 for i in range(8)])[order]
+
+        # vals = torch.zeros((3,8,8))
+        # for i in range(8):
+        #     vals[0,i,:] = torch.tensor([(labels_source[i] == x).sum() for x in range(8)])
+        #     vals[1,i,:] = torch.tensor([(labels_target[i] == x).sum() for x in range(8)])
+        #     vals[2,i,:] = torch.tensor([(labels_inter[i] == x).sum() for x in range(8)])
+
+        # import matplotlib.pyplot as plt
+        # vals_new = vals[:,order,:]
+        # vals_new = vals_new[:,:,order]
+        # cumsum = torch.cumsum(vals_new[0,:,:], axis = 1).numpy()
+        # names = ['bicycle','bus','car', 'mcycle', 'person', 'rider', 'train','truck']
+        # colors = ['tab:blue','tab:orange','tab:green','tab:red','tab:purple','tab:brown','tab:pink', 'tab:gray']
+        # fig, ax = plt.subplots()
+        # for i in range(8):
+        #     ax.bar(names, cumsum[:,7-i], color=colors[7-i], label=names[7-i])
+
+        # handles, labels = ax.get_legend_handles_labels()
+        # ax.legend(reversed(handles), reversed(labels))
+        # plt.xlabel('Class of source queue feature')
+        # plt.ylabel('Class of closest neighbor in source domain')
+
+        # # plt.legend()
+        # plt.tight_layout()
+
+        # cumsum = torch.cumsum(vals_new[1,:,:], axis = 1).numpy()
+        # names = ['bicycle','bus','car', 'mcycle', 'person', 'rider', 'train','truck']
+        # colors = ['tab:blue','tab:orange','tab:green','tab:red','tab:purple','tab:brown','tab:pink', 'tab:gray']
+        # fig, ax = plt.subplots()
+        # for i in range(8):
+        #     ax.bar(names, cumsum[:,7-i], color=colors[7-i], label=names[7-i])
+
+        # handles, labels = ax.get_legend_handles_labels()
+        # ax.legend(reversed(handles), reversed(labels))
+        # plt.xlabel('Class of target queue feature')
+        # plt.ylabel('Class of closest neighbor in target domain')
+
+        # # plt.legend()
+        # plt.tight_layout()
+
+        # cumsum = torch.cumsum(vals_new[2,:,:], axis = 1).numpy()
+        # names = ['bicycle','bus','car', 'mcycle', 'person', 'rider', 'train','truck']
+        # colors = ['tab:blue','tab:orange','tab:green','tab:red','tab:purple','tab:brown','tab:pink', 'tab:gray']
+        # fig, ax = plt.subplots()
+        # for i in range(8):
+        #     ax.bar(names, cumsum[:,7-i], color=colors[7-i], label=names[7-i])
+
+        # handles, labels = ax.get_legend_handles_labels()
+        # ax.legend(reversed(handles), reversed(labels))
+        # plt.xlabel('Class of target queue feature')
+        # plt.ylabel('Class of closest neighbor in source domain')
+
+        # # plt.legend()
+        # plt.tight_layout()
+
+        # plt.show()
 
 # def temp():
 #     import matplotlib.pyplot as plt

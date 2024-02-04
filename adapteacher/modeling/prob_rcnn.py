@@ -169,7 +169,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
         if self.box_predictor.align_proposals and 'supervised' in branch:
-            self.process_proposals(box_features, proposals, branch)
+            self.process_proposals(box_features, proposals, branch, use_bg=self.use_bg, points_per_proposals=self.points_per_proposals, subsampling=self.sampling)
             # self.keep_proposals[branch] = [predictions[0], cat([p.gt_classes for p in proposals], dim=0)]
         box_features = self.box_head(box_features)
         if self.box_predictor.compute_bbox_cov and branch == 'supervised':
@@ -260,6 +260,9 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
             num_bg_samples.append((gt_classes == self.num_classes).sum().item())
             num_fg_samples.append(gt_classes.numel() - num_bg_samples[-1])
+            if self.use_gt_proposals:
+                ids = torch.where(proposals_per_image.proposal_type == 2)[0]
+                proposals_per_image = proposals_per_image[ids]
             proposals_with_gt.append(proposals_per_image)
 
         if "supervised" in branch:
@@ -273,10 +276,9 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
         return proposals_with_gt
     
-    def process_proposals(self, box_features, proposals, branch):
-        subsample = "random"
-        use_bg = False
-        n_samples = 10
+    def process_proposals(self, box_features, proposals, branch, use_bg=False, points_per_proposals=10, subsampling='random'):
+        use_bg = use_bg
+        n_samples = points_per_proposals
         max_samples = 200
         device = box_features.device
 
@@ -299,16 +301,18 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
                 nvals.append(len(ids2))
             else:
                 vals.append([])
-                nvals.append(0)
+                nvals.append(0) 
 
         samples = self.sample_queue(branch, vals, nvals, max_samples=max_samples, device=device)
         self.update_queue(branch, vals)
 
         self.current_proposals[branch] = samples
 
-    def build_queues(self, n_classes, n_samples, feat_dim):
+    def build_queues(self, n_classes, n_samples, feat_dim, base_count=0):
         self.register_buffer("queue_source", torch.randn(n_classes, n_samples, feat_dim))
         self.register_buffer("queue_target", torch.randn(n_classes, n_samples, feat_dim))
+        self.register_buffer('source_counts', torch.ones(n_classes)*base_count)
+        self.register_buffer('target_counts', torch.ones(n_classes)*base_count)
         self.l_queue = n_samples
 
     def sample_queue(self, branch, vals, nvals, max_samples=200, device=None):
@@ -348,13 +352,16 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
     def update_queue(self, branch, vals):
         if branch == 'supervised':
             queue = self.queue_source
+            counts = self.source_counts
         elif branch == 'supervised_target':
             queue = self.queue_target
+            counts = self.target_counts
         else:
             raise ValueError("Unknown branch")
         max_samples = queue.shape[1]
         for label in range(len(vals)):
             n = len(vals[label])
+            counts[label] = counts[label] + n
             if n >= max_samples:
                 ids = list(range(n))
                 random.shuffle(ids)
