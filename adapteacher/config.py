@@ -55,6 +55,7 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.ALIGN_SCALE_COUNT = False
     _C.SEMISUPNET.ALIGN_BASE_COUNT = 500
     _C.SEMISUPNET.USE_GT_PROPOSALS = False
+    _C.SEMISUPNET.ALIGN_USE_NEGATIVES = False
 
     # dataloader
     # supervision level
