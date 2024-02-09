@@ -378,6 +378,7 @@ class ATeacherTrainer(DefaultTrainer):
             model_student.roi_heads.use_bg = cfg.SEMISUPNET.ALIGN_USE_BG
             model_student.roi_heads.sampling = cfg.SEMISUPNET.ALIGN_SUBSAMPLING
             model_student.roi_heads.points_per_proposals = cfg.SEMISUPNET.ALIGN_POINTS_PER_PROPOSALS
+            model_student.roi_heads.align_gt_proposals = cfg.SEMISUPNET.ALIGN_GT_PROPOSALS
 
             self.proj_head = model_student.roi_heads.box_predictor.proj_head
 
@@ -389,12 +390,14 @@ class ATeacherTrainer(DefaultTrainer):
             select = 'all'
             if cfg.SEMISUPNET.ALIGN_LOSS == 'MMD':
                 loss_func = geomloss.SamplesLoss(loss='energy')
-                self.align_loss = SinkLoss(self.proj_head, loss_func=loss_func, scale=cfg.SEMISUPNET.ALIGN_WEIGHT, intra_align=cfg.SEMISUPNET.ALIGN_INTRA)
+                self.align_loss = SinkLoss(self.proj_head, loss_func=loss_func, scale=cfg.SEMISUPNET.ALIGN_WEIGHT,
+                                            intra_align=cfg.SEMISUPNET.ALIGN_INTRA, use_negatives=cfg.SEMISUPNET.ALIGN_USE_NEGATIVES)
             elif cfg.SEMISUPNET.ALIGN_LOSS == 'contrast':
                 self.align_loss = ContrastLoss(self.proj_head, n_labels, select, temperature=temperature, scale=cfg.SEMISUPNET.ALIGN_WEIGHT,
                                                 base_temp=cfg.SEMISUPNET.ALIGN_PARAM_BASE, intra_align=cfg.SEMISUPNET.ALIGN_INTRA,
                                                 scale_count=cfg.SEMISUPNET.ALIGN_SCALE_COUNT)
-            self.use_gt_proposals = cfg.SEMISUPNET.USE_GT_PROPOSALS
+        self.use_gt_proposals = cfg.SEMISUPNET.USE_GT_PROPOSALS
+        self.align_gt_proposals = cfg.SEMISUPNET.ALIGN_GT_PROPOSALS
 
     def resume_or_load(self, resume=True):
         """
@@ -577,6 +580,12 @@ class ATeacherTrainer(DefaultTrainer):
         num_proposal_output = num_proposal_output / len(proposals_rpn_unsup_k)
         return list_instances, num_proposal_output, overlap
 
+    def hold_label(self, label_data):
+        for label_datum in label_data:
+            if "instances" in label_datum.keys():
+                label_datum['instances_gt'] = label_datum['instances']
+        return label_data
+
     def remove_label(self, label_data):
         for label_datum in label_data:
             if "instances" in label_datum.keys():
@@ -638,6 +647,8 @@ class ATeacherTrainer(DefaultTrainer):
 
             # input both strong and weak supervised data into model
             label_data_q.extend(label_data_k)
+            if self.align_gt_proposals:
+                label_data_q = self.hold_label(label_data_q)
             record_dict, _, _, _ = self.model(
                 label_data_q, branch="supervised")
 
@@ -676,6 +687,10 @@ class ATeacherTrainer(DefaultTrainer):
             
 
             #  0. remove unlabeled data labels
+            if self.align_gt_proposals:
+                label_data_q = self.hold_label(label_data_q)
+                label_data_k = self.hold_label(label_data_k)
+                unlabel_data_q = self.hold_label(unlabel_data_q)
             if not self.use_gt_proposals:
                 unlabel_data_q = self.remove_label(unlabel_data_q)
             unlabel_data_k = self.remove_label(unlabel_data_k)
@@ -1550,13 +1565,14 @@ class ContrastLoss(nn.Module):
         return loss
 
 class SinkLoss(nn.Module):
-    def __init__(self, proj_head, intra_align=False, scale=1.0, loss_func=None):
+    def __init__(self, proj_head, intra_align=False, scale=1.0, loss_func=None, use_negatives=False):
         super(SinkLoss, self).__init__()
         self.proj_head = proj_head
         self.intra_align = intra_align
         self.scale = scale
         self.loss_func = loss_func
         self.select = "all"
+        self.use_negatives = use_negatives
 
     def forward(self, logits):
         labels_s, feat_s = logits['supervised']
@@ -1580,7 +1596,7 @@ class SinkLoss(nn.Module):
             ids_t = torch.where(labels_t == i)[0]
             ids_sp = torch.where(labels_s == i)[0]
             ids_sn = torch.where(labels_s != i)[0]
-            loss_i = self.loss_func(nfeat_t[ids_t,:],nfeat_s[ids_sp, :]) - self.loss_func(nfeat_t[ids_t,:],nfeat_s[ids_sn, :])
+            loss_i = self.loss_func(nfeat_t[ids_t,:],nfeat_s[ids_sp, :]) - self.loss_func(nfeat_t[ids_t,:],nfeat_s[ids_sn, :])*self.use_negatives
             # losses.append(torch.where(loss_i>0, loss_i, 0))
             losses.append(loss_i)
 
@@ -1608,6 +1624,10 @@ class SinkLoss(nn.Module):
         # tols_source = np.array([intra_source[200*i:200+200*i, 200*i:200+200*i].sum()/199/200 for i in range(8)])[order]
         # tols_target = np.array([intra_target[200*i:200+200*i, 200*i:200+200*i].sum()/199/200 for i in range(8)])[order]
         # tols_inter = np.array([inter[200*i:200+200*i, 200*i:200+200*i].sum()/199/200 for i in range(8)])[order]
+
+        # unif1 = -torch.log(torch.exp(-2*(feat_1.detach().cpu().unsqueeze(1) - feat_1.detach().cpu().unsqueeze(0)).norm(dim = 2)**2).mean())
+        # unif2 = -torch.log(torch.exp(-2*(feat_2.detach().cpu().unsqueeze(1) - feat_2.detach().cpu().unsqueeze(0)).norm(dim = 2)**2).mean())
+        # unif3 = -torch.log(torch.exp(-2*(feat_1.detach().cpu().unsqueeze(1) - feat_2.detach().cpu().unsqueeze(0)).norm(dim = 2)**2).mean())
 
         # vals = torch.zeros((3,8,8))
         # for i in range(8):

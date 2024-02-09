@@ -485,6 +485,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         bbox_cov_type: str,
         cfg,
         prob_iou,
+        select_iou,
         use_gt_proposals,
         # dis_loss_weight: float = 0,
     ):
@@ -552,6 +553,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         # self.bceLoss_func = nn.BCEWithLogitsLoss()
 
         self.prob_iou = prob_iou
+        self.select_iou = select_iou
         self.test_with_gt_prop = False
 
         self.roi_heads.use_gt_proposals = use_gt_proposals
@@ -576,6 +578,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             "bbox_cov_type": cfg.MODEL.PROBABILISTIC_MODELING.BBOX_COV_LOSS.COVARIANCE_TYPE,
             "cfg": cfg,
             "prob_iou": cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU,
+            "select_iou": cfg.MODEL.PROBABILISTIC_MODELING.SELECT_IOU2,
             "use_gt_proposals": cfg.SEMISUPNET.USE_GT_PROPOSALS,
             # "dis_loss_ratio": cfg.xxx,
         }
@@ -666,6 +669,11 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         else:
             gt_instances = None
 
+        if "instances_gt" in batched_inputs[0]:
+            gt_instances_fixed = [x["instances_gt"].to(self.device) for x in batched_inputs]
+        else:
+            gt_instances_fixed = None
+
         features = self.backbone(images.tensor)
 
         # TODO: remove the usage of if else here. This needs to be re-organized
@@ -690,7 +698,8 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 targets=gt_instances,
                 branch=branch,
                 unsup=False,
-                current_step=self.iter
+                current_step=self.iter,
+                targets_gt=gt_instances_fixed,
             )
 
             # visualization
@@ -726,6 +735,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 targets=gt_instances,
                 branch=branch,
                 unsup=True,
+                targets_gt=gt_instances_fixed,
             )
 
             # visualization
@@ -760,7 +770,8 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 compute_loss=False,
                 branch=branch,
                 unsup=True,
-                prob_iou=self.prob_iou,
+                # prob_iou=self.prob_iou,
+                # select_iou=self.select_iou,
             )
 
             # if self.vis_period > 0:

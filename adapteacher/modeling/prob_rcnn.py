@@ -85,6 +85,8 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             # computed as:  (N * (N + 1)) / 2
             bbox_cov_dims = 10
 
+        # select_iou = cfg.MODEL.PROBABILISTIC_MODELING.SELECT_IOU2
+
         box_predictor = ProbabilisticFastRCNNOutputLayers(
             cfg,
             box_head.output_shape,
@@ -95,7 +97,8 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             bbox_cov_loss,
             bbox_cov_type,
             bbox_cov_dims,
-            bbox_cov_num_samples)
+            bbox_cov_num_samples,
+            )
 
         # if cfg.MODEL.ROI_HEADS.LOSS == "CrossEntropy":
         #     box_predictor = FastRCNNOutputLayers(cfg, box_head.output_shape)
@@ -123,15 +126,25 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         unsup=False,
         current_step=0,
         prob_iou=False,
+        select_iou=False,
+        targets_gt=None,
     ) -> Tuple[List[Instances], Dict[str, torch.Tensor]]:
 
         del images
         if self.training and compute_loss:  # apply if training loss
             assert targets
             # 1000 --> 512
+
+            if targets_gt is not None:
+                proposals_gt = self.label_and_sample_proposals(proposals, targets_gt, branch=branch, gt_only=True)
+            else:
+                proposals_gt = None
+
             proposals = self.label_and_sample_proposals(
                 proposals, targets, branch=branch
             )
+
+
         elif compute_val_loss:  # apply if val loss
             assert targets
             # 1000 --> 512
@@ -145,12 +158,12 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
         if (self.training and compute_loss) or compute_val_loss:
             losses, _ = self._forward_box(
-                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup, current_step=current_step
+                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup, current_step=current_step, proposals_gt=proposals_gt,
             )
             return proposals, losses
         else:
             pred_instances, predictions = self._forward_box(
-                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup, prob_iou=prob_iou
+                features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup,
             )
 
             return pred_instances, predictions
@@ -164,13 +177,18 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         branch: str = "",
         unsup: bool = False,
         current_step = 0,
-        prob_iou: bool = False,
+        proposals_gt = None,
+        # prob_iou: bool = False,
+        # select_iou: bool = False,
     ) -> Union[Dict[str, torch.Tensor], List[Instances]]:
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
-        if self.box_predictor.align_proposals and 'supervised' in branch:
+        if self.box_predictor.align_proposals and 'supervised' in branch and not self.align_gt_proposals:
             self.process_proposals(box_features, proposals, branch, use_bg=self.use_bg, points_per_proposals=self.points_per_proposals, subsampling=self.sampling)
             # self.keep_proposals[branch] = [predictions[0], cat([p.gt_classes for p in proposals], dim=0)]
+        elif self.box_predictor.align_proposals and 'supervised' in branch and self.align_gt_proposals:
+            box_features_gt = self.box_pooler(features, [x.proposal_boxes for x in proposals_gt])
+            self.process_proposals(box_features_gt, proposals_gt, branch, use_bg=self.use_bg, points_per_proposals=self.points_per_proposals, subsampling=self.sampling)
         box_features = self.box_head(box_features)
         if self.box_predictor.compute_bbox_cov and branch == 'supervised':
             predictions = self.box_predictor(box_features, proposals=proposals)
@@ -210,13 +228,16 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
     @torch.no_grad()
     def label_and_sample_proposals(
-        self, proposals: List[Instances], targets: List[Instances], branch: str = ""
+        self, proposals: List[Instances], targets: List[Instances], branch: str = "", gt_only=False,
     ) -> List[Instances]:
         gt_boxes = [x.gt_boxes for x in targets]
         is_gt = [torch.zeros(len(x)) for x in proposals]
         if self.proposal_append_gt:
+            n_preds = [len(x) for x in proposals]
             proposals = add_ground_truth_to_proposals(gt_boxes, proposals)
             is_gt = [torch.cat((y,torch.ones(len(x)-len(y)))) for x, y in zip(proposals, is_gt)]
+            if gt_only:
+                proposals = [prop[n:] for prop, n in zip(proposals, n_preds)]
 
         proposals_with_gt = []
 
@@ -265,7 +286,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
                 proposals_per_image = proposals_per_image[ids]
             proposals_with_gt.append(proposals_per_image)
 
-        if "supervised" in branch:
+        if "supervised" in branch and not gt_only:
             storage = get_event_storage()
             storage.put_scalar(
                 "roi_head/num_target_fg_samples_" + branch, np.mean(num_fg_samples)
@@ -411,9 +432,11 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         scale_expo_iou=0.0,
         domain_invariant_inst=0.0,
         align_proposals=False,
-        normed_proj=False,
+        normed_proj=True,
         burnup_steps=20000,
         gt_inject_cov_weight=1.0,
+        select_iou=False,
+        align_use_proj=True,
     ):
         """
         NOTE: this interface is experimental.
@@ -472,6 +495,8 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         for l in [self.cls_score, self.bbox_pred]:
             nn.init.constant_(l.bias, 0)
 
+        self.select_iou = select_iou
+
         # if self.compute_cls_var:
         #     self.cls_var = Linear(input_size, num_classes + 1)
         #     nn.init.normal_(self.cls_var.weight, std=0.0001)
@@ -484,6 +509,9 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                 bbox_cov_dims)
             nn.init.normal_(self.bbox_cov.weight, std=0.0001)
             nn.init.constant_(self.bbox_cov.bias, 0)
+            if self.select_iou:
+                self.bbox_iou_pred = Cov2IoUHead(in_dim=8, feat_dim=50, depth=5)
+
         elif self.compute_bbox_cov and self.bbox_cov_loss == 'energy_loss2':
             self.bbox_prob_gen = Linear(
                 input_size + bbox_cov_dims,
@@ -515,8 +543,10 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
         if self.align_proposals:
             feat_dim = 512
-            use_proj = True
-            self.proj_head = ProjectionHead(feat_dim=feat_dim, use_proj=use_proj, normed=normed_proj)
+            self.use_proj = align_use_proj
+            self.proj_head = ProjectionHead(feat_dim=feat_dim, use_proj=self.use_proj, normed=normed_proj)
+
+        self.select_iou = select_iou
 
     @classmethod
     def from_config(cls,
@@ -563,6 +593,8 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "normed_proj": cfg.SEMISUPNET.ALIGN_NORMED,
             "burnup_steps": cfg.SEMISUPNET.BURN_UP_STEP,
             "gt_inject_cov_weight": cfg.MODEL.PROBABILISTIC_MODELING.GT_INJECT_COV_WEIGHT,
+            "select_iou": cfg.MODEL.PROBABILISTIC_MODELING.SELECT_IOU2,
+            "align_use_proj": cfg.SEMISUPNET.ALIGN_USE_PROJ,
         }
 
     def forward(self, x, proposals=None):
@@ -814,6 +846,13 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                     # Final Loss
                     loss_box_reg = (
                         loss_first_moment_match + loss_covariance_regularize) / loss_reg_normalizer
+                    
+                    # if self.bbox_iou_pred:
+                    if 0:
+                        pass
+                        # pred_boxes = self.box2box_transform.a (pred_proposal_deltas
+                        # iou = intersect_self(result.pred_boxes.tensor, box_covs[keep])
+                        # gt_proposal_deltas = self.box2box_transform.get_deltas(proposals_boxes.tensor, gt_boxes.tensor)
 
                 else:
                     raise ValueError(
@@ -928,6 +967,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             self.test_nms_thresh,
             self.test_topk_per_image,
             self.prob_iou*unsup,
+            self.select_iou,
         )
 
     def predict_boxes_for_gt_classes(self, predictions, proposals):
@@ -1005,6 +1045,7 @@ def prob_fast_rcnn_inference(
     nms_thresh: float,
     topk_per_image: int,
     prob_iou,
+    select_iou,
 ):
     """
     Call `fast_rcnn_inference_single_image` for all images.
@@ -1033,7 +1074,7 @@ def prob_fast_rcnn_inference(
     """
     result_per_image = [
         prob_fast_rcnn_inference_single_image(
-            scores_per_image, boxes_per_image, score_cov_img, box_cov_img, image_shape, score_thresh, nms_thresh, topk_per_image, prob_iou=prob_iou
+            scores_per_image, boxes_per_image, score_cov_img, box_cov_img, image_shape, score_thresh, nms_thresh, topk_per_image, prob_iou=prob_iou, select_iou=select_iou
         )
         for scores_per_image, boxes_per_image, score_cov_img, box_cov_img, image_shape in zip(scores, boxes, score_covs, box_covs, image_shapes)
     ]
@@ -1050,6 +1091,7 @@ def prob_fast_rcnn_inference_single_image(
     nms_thresh: float,
     topk_per_image: int,
     prob_iou,
+    select_iou,
 ):
     """
     Single-image inference. Return bounding-box detection results by thresholding
@@ -1087,7 +1129,7 @@ def prob_fast_rcnn_inference_single_image(
     else:
         boxes = boxes[filter_mask]
     scores = scores[filter_mask]
-
+    # self_iou = intersect_self(boxes, box_covs[keep])
 
 
 
@@ -1137,17 +1179,30 @@ class ProjectionHead(nn.Module):
     def __init__(self, feat_dim=1024, use_proj=True, normed=True):
         super(ProjectionHead, self).__init__()
         self.normed = normed
+        self.use_proj = use_proj
         if use_proj:
             self.head = nn.Sequential(nn.Linear(feat_dim, feat_dim), nn.BatchNorm1d(feat_dim), nn.ReLU(), nn.Linear(feat_dim, feat_dim))
     
     def forward(self, x):
-        out = self.head(x)
+        if self.use_proj:
+            out = self.head(x)
+        else:
+            out = x
         if self.normed:
             normed_out = nn.functional.normalize(out)
             return normed_out
         else:
             return out
-
+        
+class Cov2IoUHead(nn.Module):
+    def __init__(self, in_dim=8, feat_dim=50, depth=5):
+        super(ProjectionHead, self).__init__()
+        inner_stack = [nn.Linear(feat_dim, feat_dim), nn.BatchNorm1d(feat_dim), nn.ReLU()]*(depth-2)
+        self.head = nn.Sequential(nn.Linear(in_dim, feat_dim), nn.BatchNorm1d(feat_dim), nn.ReLU(), *inner_stack, nn.Linear(feat_dim, 1))
+    
+    def forward(self, x):
+        out = nn.Sigmoid(self.head(x))
+        return out
 
 # import matplotlib.pyplot as plt
 
