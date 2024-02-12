@@ -438,6 +438,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         gt_inject_cov_weight=1.0,
         select_iou=False,
         align_use_proj=True,
+        box_norm_class=False,
     ):
         """
         NOTE: this interface is experimental.
@@ -486,15 +487,24 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
 
         # The prediction layer for num_classes foreground classes and one background class
         # (hence + 1)
-        self.cls_score = Linear(input_size, num_classes + 1)
+        if box_norm_class:
+            self.cls_score = NormedLinear(input_size, num_classes + 1)
+        else:
+            self.cls_score = Linear(input_size, num_classes + 1)
         num_bbox_reg_classes = 1.0 if cls_agnostic_bbox_reg else num_classes
         box_dim = len(box2box_transform.weights)
         self.bbox_pred = Linear(input_size, num_bbox_reg_classes * box_dim)
 
-        nn.init.normal_(self.cls_score.weight, std=0.01)
-        nn.init.normal_(self.bbox_pred.weight, std=0.001)
-        for l in [self.cls_score, self.bbox_pred]:
-            nn.init.constant_(l.bias, 0)
+        if box_norm_class:
+            nn.init.normal_(self.cls_score.linear.weight, std=0.01)
+            nn.init.normal_(self.bbox_pred.weight, std=0.001)
+            for l in [self.cls_score.linear, self.bbox_pred]:
+                nn.init.constant_(l.bias, 0)
+        else:
+            nn.init.normal_(self.cls_score.weight, std=0.01)
+            nn.init.normal_(self.bbox_pred.weight, std=0.001)
+            for l in [self.cls_score, self.bbox_pred]:
+                nn.init.constant_(l.bias, 0)
 
         self.select_iou = select_iou
 
@@ -596,6 +606,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "gt_inject_cov_weight": cfg.MODEL.PROBABILISTIC_MODELING.GT_INJECT_COV_WEIGHT,
             "select_iou": cfg.MODEL.PROBABILISTIC_MODELING.SELECT_IOU2,
             "align_use_proj": cfg.SEMISUPNET.ALIGN_USE_PROJ,
+            "box_norm_class": cfg.SEMISUPNET.BOX_NORM_CLASS,
         }
 
     def forward(self, x, proposals=None):
@@ -1204,6 +1215,16 @@ class Cov2IoUHead(nn.Module):
     def forward(self, x):
         out = nn.Sigmoid(self.head(x))
         return out
+
+class NormedLinear(nn.Module):
+    def __init__(self, in_dim=1024, out_dim=9):
+        super(NormedLinear, self).__init__()
+        self.linear = Linear(in_dim, out_dim)
+    
+    def forward(self, x):
+        out = self.linear(x)
+        return nn.functional.normalize(out)
+    
 
 # import matplotlib.pyplot as plt
 
