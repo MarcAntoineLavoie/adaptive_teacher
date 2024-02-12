@@ -306,7 +306,8 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         feat_shape = box_features.shape
         m = feat_shape[2]*feat_shape[3]
         labels = cat([p.gt_classes for p in proposals], dim=0)
-        n1 = labels.max()
+        # n1 = labels.max()
+        n1 = 8
         if use_bg:
             n1 = n1 + 1
         vals = []
