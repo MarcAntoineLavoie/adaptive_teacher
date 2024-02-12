@@ -281,7 +281,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
             num_bg_samples.append((gt_classes == self.num_classes).sum().item())
             num_fg_samples.append(gt_classes.numel() - num_bg_samples[-1])
-            if self.use_gt_proposals:
+            if self.use_gt_proposals_only:
                 ids = torch.where(proposals_per_image.proposal_type == 2)[0]
                 proposals_per_image = proposals_per_image[ids]
             proposals_with_gt.append(proposals_per_image)

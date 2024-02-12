@@ -487,6 +487,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         prob_iou,
         select_iou,
         use_gt_proposals,
+        use_gt_proposals_only,
         # dis_loss_weight: float = 0,
     ):
         """
@@ -557,6 +558,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         self.test_with_gt_prop = False
 
         self.roi_heads.use_gt_proposals = use_gt_proposals
+        self.roi_heads.use_gt_proposals_only = use_gt_proposals_only
 
     def build_discriminator(self):
         self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]).to(self.device) # Need to know the channel
@@ -580,6 +582,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             "prob_iou": cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU,
             "select_iou": cfg.MODEL.PROBABILISTIC_MODELING.SELECT_IOU2,
             "use_gt_proposals": cfg.SEMISUPNET.USE_GT_PROPOSALS,
+            "use_gt_proposals_only": cfg.SEMISUPNET.USE_GT_PROPOSALS_ONLY,
             # "dis_loss_ratio": cfg.xxx,
         }
 

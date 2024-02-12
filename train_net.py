@@ -115,7 +115,7 @@ if __name__ == "__main__":
     #   OUTPUT_DIR output/exp_city
 
     # args.num_gpus = 1
-    args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
+    # args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_test.yaml'
     # args.config_file = './configs/faster_rcnn_R101_cross_clipart_v2.yaml'
@@ -129,6 +129,13 @@ if __name__ == "__main__":
     # args.output_dir = 'output/test_v2_align_contrast100'
     # args.output_dir = 'output/test_v2_iou70_min30_temp'
     # args.output_dir = 'output/test_v2_iou70_min30'
+    # args.output_dir = 'output/test_v2_7030_L1'
+    # args.output_dir = 'output/test_v2_align_contrast010_noDA'
+    # args.output_dir = 'output/test_v2_align_contrast010/'
+    # args.output_dir = 'output/test_v2_align_contrast100/'
+    # args.output_dir = 'output/test_v2_align_contrast010_temp100/'
+    # args.output_dir = 'output/test_v2_align_contrast010_gtprops/'
+
     # args.use_old_cfg = True
     args.use_old_cfg = False
 

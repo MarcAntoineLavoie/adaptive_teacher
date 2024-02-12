@@ -372,7 +372,11 @@ class ATeacherTrainer(DefaultTrainer):
                 n_labels = 9
             else:
                 n_labels = 8
-            model_student.roi_heads.build_queues(n_classes=n_labels, n_samples=200, feat_dim=512, base_count=cfg.SEMISUPNET.ALIGN_BASE_COUNT)
+            if 'vgg4' in cfg.MODEL.RPN.IN_FEATURES:
+                feat_dim = 512
+            else:
+                feat_dim = 512
+            model_student.roi_heads.build_queues(n_classes=n_labels, n_samples=200, feat_dim=feat_dim, base_count=cfg.SEMISUPNET.ALIGN_BASE_COUNT)
             model_student.roi_heads.align_proposals = self.align_proposals
             model_student.roi_heads.current_proposals = {}
             model_student.roi_heads.use_bg = cfg.SEMISUPNET.ALIGN_USE_BG
@@ -397,6 +401,7 @@ class ATeacherTrainer(DefaultTrainer):
                                                 base_temp=cfg.SEMISUPNET.ALIGN_PARAM_BASE, intra_align=cfg.SEMISUPNET.ALIGN_INTRA,
                                                 scale_count=cfg.SEMISUPNET.ALIGN_SCALE_COUNT)
         self.use_gt_proposals = cfg.SEMISUPNET.USE_GT_PROPOSALS
+        self.use_gt_proposals_only = cfg.SEMISUPNET.USE_GT_PROPOSALS_ONLY
         self.align_gt_proposals = cfg.SEMISUPNET.ALIGN_GT_PROPOSALS
 
     def resume_or_load(self, resume=True):
@@ -1611,8 +1616,9 @@ class SinkLoss(nn.Module):
         # test = self.criterion()
 
         # vals = []
-        # intra_source = torch.matmul(feat_1, feat_1.T).detach().cpu() - torch.eye(1600)
-        # intra_target = torch.matmul(feat_2, feat_2.T).detach().cpu() - torch.eye(1600)
+        # n = labels_s.shape[0]
+        # intra_source = torch.matmul(feat_1, feat_1.T).detach().cpu() - torch.eye(n)
+        # intra_target = torch.matmul(feat_2, feat_2.T).detach().cpu() - torch.eye(n)
         # inter = torch.matmul(feat_1, feat_2.T).detach().cpu()
         # labels_source = [labels_1[intra_source.max(dim=0)[1][200*i:200+200*i]] for i in range(8)]
         # labels_target = [labels_2[intra_target.max(dim=0)[1][200*i:200+200*i]] for i in range(8)]
