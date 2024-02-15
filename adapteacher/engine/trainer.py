@@ -1609,6 +1609,18 @@ class SinkLoss(nn.Module):
        
         return loss
 
+# import matplotlib.pyplot as plt
+# from detectron2.utils.visualizer import Visualizer
+
+# img_ = unlabel_data_q[0]['image'].transpose(0,1).transpose(1,2)
+
+# v = Visualizer(img_[:, :, [2,1,0]])
+# for box in unlabel_data_q[0]['instances'].gt_boxes.to('cpu'):
+#     v.draw_box(box)
+# img = v.get_output().img[:, :, [2,1,0]]
+# plt.figure();plt.imshow(img);plt.show()
+
+
         # # compute mean of log-likelihood over positive
         # mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
         # log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)

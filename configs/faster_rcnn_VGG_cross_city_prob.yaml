@@ -15,6 +15,7 @@ INPUT:
   CROP:
     ENABLED: True
   MIN_SIZE_TRAIN: (550,)
+  USE_RANDOM_NOISE: True
 MODEL:
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
   META_ARCHITECTURE: "ProbDATwoStagePseudoLabGeneralizedRCNN"
@@ -84,6 +85,8 @@ DATASETS:
   TRAIN_LABEL: ("cityscapes_fine_instance_seg_train",)
   TRAIN_UNLABEL: ("cityscapes_foggy_train",)
   TEST: ("cityscapes_foggy_val",)
+  # TRAIN_UNLABEL: ("ACDC_train_fog",)
+  # TEST: ("ACDC_val_fog",)
 SEMISUPNET:
   Trainer: "ateacher"
   BBOX_THRESHOLD: 0.8

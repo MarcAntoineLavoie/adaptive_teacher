@@ -26,22 +26,23 @@ def build_strong_augmentation(cfg, is_train):
         augmentation.append(transforms.RandomGrayscale(p=0.2))
         augmentation.append(transforms.RandomApply([GaussianBlur([0.1, 2.0])], p=0.5))
 
-        randcrop_transform = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.RandomErasing(
-                    p=0.7, scale=(0.05, 0.2), ratio=(0.3, 3.3), value="random"
-                ),
-                transforms.RandomErasing(
-                    p=0.5, scale=(0.02, 0.2), ratio=(0.1, 6), value="random"
-                ),
-                transforms.RandomErasing(
-                    p=0.3, scale=(0.02, 0.2), ratio=(0.05, 8), value="random"
-                ),
-                transforms.ToPILImage(),
-            ]
-        )
-        augmentation.append(randcrop_transform)
+        if cfg.INPUT.USE_RANDOM_NOISE:
+            randcrop_transform = transforms.Compose(
+                [
+                    transforms.ToTensor(),
+                    transforms.RandomErasing(
+                        p=0.7, scale=(0.05, 0.2), ratio=(0.3, 3.3), value="random"
+                    ),
+                    transforms.RandomErasing(
+                        p=0.5, scale=(0.02, 0.2), ratio=(0.1, 6), value="random"
+                    ),
+                    transforms.RandomErasing(
+                        p=0.3, scale=(0.02, 0.2), ratio=(0.05, 8), value="random"
+                    ),
+                    transforms.ToPILImage(),
+                ]
+            )
+            augmentation.append(randcrop_transform)
 
         logger.info("Augmentations used in training: " + str(augmentation))
     return transforms.Compose(augmentation)
@@ -65,22 +66,23 @@ def build_strong_augmentation_detect(cfg, is_train):
         augmentation.append(transforms.RandomGrayscale(p=0.2))
         augmentation.append(transforms.RandomApply([GaussianBlur([0.1, 2.0])], p=0.5))
 
-        randcrop_transform = Compose_detect(
-            [
-                transforms.ToTensor(),
-                RandomErasing_detect(
-                    p=0.7, scale=(0.05, 0.2), ratio=(0.3, 3.3), value="random"
-                ),
-                RandomErasing_detect(
-                    p=0.5, scale=(0.02, 0.2), ratio=(0.1, 6), value="random"
-                ),
-                RandomErasing_detect(
-                    p=0.3, scale=(0.02, 0.2), ratio=(0.05, 8), value="random"
-                ),
-                transforms.ToPILImage(),
-            ]
-        )
-        augmentation.append(randcrop_transform)
+        if cfg.INPUT.USE_RANDOM_NOISE:
+            randcrop_transform = Compose_detect(
+                [
+                    transforms.ToTensor(),
+                    RandomErasing_detect(
+                        p=0.7, scale=(0.05, 0.2), ratio=(0.3, 3.3), value="random"
+                    ),
+                    RandomErasing_detect(
+                        p=0.5, scale=(0.02, 0.2), ratio=(0.1, 6), value="random"
+                    ),
+                    RandomErasing_detect(
+                        p=0.3, scale=(0.02, 0.2), ratio=(0.05, 8), value="random"
+                    ),
+                    transforms.ToPILImage(),
+                ]
+            )
+            augmentation.append(randcrop_transform)
 
         logger.info("Augmentations used in training: " + str(augmentation))
     return Compose_detect(augmentation)
