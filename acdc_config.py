@@ -8,7 +8,7 @@ if len(sys.argv) > 2:
 else:
     run_type = 'faster_rcnn_VGG_cross_city_prob.yaml'
 
-config_file = "adaptive_teacher/configs/" + run_type
+config_file = "configs/" + run_type
 output_file = config_file.rsplit('/',1)[0] + "/faster_rcnn_VGG_cross_city_acdc.yaml"
 
 file_train = '("ACDC_train_{}",)'.format(dataset)
