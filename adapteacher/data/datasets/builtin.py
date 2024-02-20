@@ -8,7 +8,7 @@ from iopath.common.file_io import PathManager
 
 from detectron2.data.datasets.pascal_voc import register_pascal_voc
 from detectron2.data.datasets.builtin_meta import _get_builtin_metadata
-from .cityscapes_foggy import load_cityscapes_instances
+from .cityscapes_foggy import load_cityscapes_instances, load_ACDC_instances
 import io
 import logging
 
@@ -184,7 +184,36 @@ def register_all_water(root):
         # MetadataCatalog.get(name).thing_classes = ["person", "dog","bicycle", "bird", "car", "cat"]
         # MetadataCatalog.get(name).evaluator_type = "coco"
 
+# ==== Predefined splits for raw cityscapes foggy images ===========
+_RAW_ACDC_SPLITS = {
+    # "ACDC_train_all": ("acdc/rgb_anon/", "acdc/gt_detection/instancesonly_train_gt_detection.json"),
+    # "ACDC_val_all": ("acdc/rgb_anon/", "acdc/gt_detection/instancesonly_val_gt_detection.json"),
+    "ACDC_train_fog": ("acdc/rgb_anon_trainvaltest/rgb_anon/fog/train/", "acdc/gt_detection_trainval/gt_detection/fog/train/"),
+    "ACDC_val_fog": ("acdc/rgb_anon_trainvaltest/rgb_anon/fog/val/", "acdc/gt_detection_trainval/gt_detection/fog/val/"),
+    "ACDC_train_night": ("acdc/rgb_anon_trainvaltest/rgb_anon/night/train/", "acdc/gt_detection_trainval/gt_detection/night/train/"),
+    "ACDC_val_night": ("acdc/rgb_anon_trainvaltest/rgb_anon/night/val/", "acdc/gt_detection_trainval/gt_detection/night/val/"),
+    "ACDC_train_rain": ("acdc/rgb_anon_trainvaltest/rgb_anon/rain/train/", "acdc/gt_detection_trainval/gt_detection/rain/train/"),
+    "ACDC_val_rain": ("acdc/rgb_anon_trainvaltest/rgb_anon/rain/val/", "acdc/gt_detection_trainval/gt_detection/rain/val/"),
+    "ACDC_train_snow": ("acdc/rgb_anon_trainvaltest/rgb_anon/snow/train/", "acdc/gt_detection_trainval/gt_detection/snow/train/"),
+    "ACDC_val_snow": ("acdc/rgb_anon_trainvaltest/rgb_anon/snow/val/", "acdc/gt_detection_trainval/gt_detection/snow/val/"),
+}
+
+
+def register_ACDC(root):
+    # root = "manifold://mobile_vision_dataset/tree/yujheli/dataset"
+    for key, (image_dir, gt_dir) in _RAW_ACDC_SPLITS.items():
+        meta = _get_builtin_metadata("cityscapes")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        inst_key = key
+        DatasetCatalog.register(inst_key, lambda x=gt_dir: load_ACDC_instances(x),)
+        MetadataCatalog.get(inst_key).set(
+            image_dir=image_dir, gt_dir=gt_dir, evaluator_type="coco", **meta
+        )
+
 register_all_cityscapes_foggy(_root)
 register_all_clipart(_root)
 register_all_water(_root)
+register_ACDC(_root)
 

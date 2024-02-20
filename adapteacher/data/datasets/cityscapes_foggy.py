@@ -288,3 +288,20 @@ def _cityscapes_files_to_dict(files, from_json, to_polygons):
             annos.append(anno)
     ret["annotations"] = annos
     return ret
+
+
+import pickle
+def load_ACDC_instances(gt_dir):
+    f_in = '/'.join((gt_dir,'img_anno'))
+    with open(f_in, 'rb') as fin:
+        data_dict = pickle.load(fin)
+
+    # Map cityscape ids to contiguous ids
+    from cityscapesscripts.helpers.labels import labels
+
+    labels = [l for l in labels if l.hasInstances and not l.ignoreInEval]
+    dataset_id_to_contiguous_id = {l.id: idx for idx, l in enumerate(labels)}
+    for dict_per_image in data_dict:
+        for anno in dict_per_image["annotations"]:
+            anno["category_id"] = dataset_id_to_contiguous_id[anno["category_id"]]
+    return data_dict
