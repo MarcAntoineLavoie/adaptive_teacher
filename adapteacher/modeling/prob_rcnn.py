@@ -315,12 +315,16 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         for label in range(n1):
             ids1 = labels == label
             if ids1.any():
-                features = box_features[ids1,:,:,:].reshape(-1,512,m)
-                n2 = features.shape[0]
-                features = features.transpose(1,2).reshape(-1,512)
-                ids2 = sum([random.sample(list(range(i*m,(i+1)*m)), n_samples) for i in range(n2)], [])
-                vals.append(features[ids2,:])
-                nvals.append(len(ids2))
+                if subsampling == 'random':
+                    features = box_features[ids1,:,:,:].reshape(-1,512,m)
+                    n2 = features.shape[0]
+                    features = features.transpose(1,2).reshape(-1,512)
+                    ids2 = sum([random.sample(list(range(i*m,(i+1)*m)), n_samples) for i in range(n2)], [])
+                    vals.append(features[ids2,:])
+                    nvals.append(len(ids2))
+                elif subsampling == 'centre':
+                    vals.append(features[:,:,2:5,2:5].reshape(-1,512,9))
+                    nvals.append(9)
             else:
                 vals.append([])
                 nvals.append(0) 
