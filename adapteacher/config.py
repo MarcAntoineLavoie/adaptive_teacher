@@ -62,6 +62,7 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.ALIGN_PROTOTYPES = False
     _C.SEMISUPNET.ALIGN_SOURCE_PROT_ONLY = False
     _C.SEMISUPNET.BOX_NORM_CLASS = False
+    _C.SEMISUPNET.EVAL_PSEUDO_LABELS = False
 
     # dataloader
     # supervision level

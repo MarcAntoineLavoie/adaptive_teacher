@@ -64,6 +64,10 @@ from math import comb
 from adapteacher.modeling.prob_rcnn import ProbROIHeadsPseudoLab
 
 import geomloss
+import numpy
+import os
+from itertools import chain
+import csv
 
 # Supervised-only Trainer
 class BaselineTrainer(DefaultTrainer):
@@ -404,6 +408,21 @@ class ATeacherTrainer(DefaultTrainer):
         self.use_gt_proposals_only = cfg.SEMISUPNET.USE_GT_PROPOSALS_ONLY
         self.align_gt_proposals = cfg.SEMISUPNET.ALIGN_GT_PROPOSALS
 
+        self.eval_pseudo_labels = cfg.SEMISUPNET.EVAL_PSEUDO_LABELS
+        if self.eval_pseudo_labels:
+            self.pseudo_subsampling = 1
+            classes = ['person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcylce', 'bicycle', 'all']
+            stats = ['gt', 'raw50', 'raw75', 'rawn25', 'sel50', 'sel75', 'seln25']
+            self.pseudo_counts = torch.zeros(len(classes)*len(stats))
+            self.pseudo_stats_file = ('/').join((cfg.OUTPUT_DIR,'pseudo_stats.csv'))
+            if not os.path.isfile(self.pseudo_stats_file):
+                columns = ['iter'] + list(chain.from_iterable([['_'.join((x,y)) for y in stats] for x in classes]))
+                # header = (', ').join(columns)
+                with open(self.pseudo_stats_file, 'w') as f_out:
+                    csv_writer = csv.writer(f_out, delimiter=' ')
+                    csv_writer.writerow(columns)
+                
+
     def resume_or_load(self, resume=True):
         """
         If `resume==True` and `cfg.OUTPUT_DIR` contains the last checkpoint (defined by
@@ -561,28 +580,30 @@ class ATeacherTrainer(DefaultTrainer):
         return new_proposal_inst, overlap
 
     def process_pseudo_label(
-        self, proposals_rpn_unsup_k, cur_threshold, proposal_type, psedo_label_method=""
+        self, proposals_rpn_unsup_k, cur_threshold, proposal_type, psedo_label_method="", gt_labels=None,
     ):
         list_instances = []
         num_proposal_output = 0.0
-        for proposal_bbox_inst in proposals_rpn_unsup_k:
+        for proposal_bbox_inst_raw in proposals_rpn_unsup_k:
             # thresholding
             if self.select_iou:
                 if proposal_type == 'roih':
-                    proposal_bbox_inst, overlap = self.threshold_self(proposal_bbox_inst, thres=cur_threshold,)
+                    proposal_bbox_inst, overlap = self.threshold_self(proposal_bbox_inst_raw, thres=cur_threshold,)
                 else:
                     proposal_bbox_inst, overlap = self.threshold_bbox(
-                    proposal_bbox_inst, thres=cur_threshold, proposal_type=proposal_type
+                    proposal_bbox_inst_raw, thres=cur_threshold, proposal_type=proposal_type
                 )
             elif psedo_label_method == "thresholding":
                 proposal_bbox_inst, overlap = self.threshold_bbox(
-                    proposal_bbox_inst, thres=cur_threshold, proposal_type=proposal_type
+                    proposal_bbox_inst_raw, thres=cur_threshold, proposal_type=proposal_type
                 )
             else:
                 raise ValueError("Unkown pseudo label boxes methods")
             num_proposal_output += len(proposal_bbox_inst)
             list_instances.append(proposal_bbox_inst)
         num_proposal_output = num_proposal_output / len(proposals_rpn_unsup_k)
+        if gt_labels is not None and self.eval_pseudo_labels:
+            self.check_pseudo_labels(proposals_rpn_unsup_k, list_instances, gt_labels)
         return list_instances, num_proposal_output, overlap
 
     def hold_label(self, label_data):
@@ -692,10 +713,14 @@ class ATeacherTrainer(DefaultTrainer):
             
 
             #  0. remove unlabeled data labels
-            if self.align_gt_proposals:
+            if self.align_gt_proposals or self.eval_pseudo_labels:
                 label_data_q = self.hold_label(label_data_q)
                 label_data_k = self.hold_label(label_data_k)
                 unlabel_data_q = self.hold_label(unlabel_data_q)
+                unlabel_data_k = self.hold_label(unlabel_data_k)
+                hold_labels = unlabel_data_k
+            else:
+                hold_labels = None
             if not self.use_gt_proposals:
                 unlabel_data_q = self.remove_label(unlabel_data_q)
             unlabel_data_k = self.remove_label(unlabel_data_k)
@@ -737,7 +762,7 @@ class ATeacherTrainer(DefaultTrainer):
             joint_proposal_dict["proposals_pseudo_rpn"] = pesudo_proposals_rpn_unsup_k
             # Pseudo_labeling for ROI head (bbox location/objectness)
             pesudo_proposals_roih_unsup_k, _, overlap = self.process_pseudo_label(
-                proposals_roih_unsup_k, cur_threshold, "roih", "thresholding"
+                proposals_roih_unsup_k, cur_threshold, "roih", "thresholding", gt_labels=hold_labels
             )
             joint_proposal_dict["proposals_pseudo_roih"] = pesudo_proposals_roih_unsup_k
             record_dict.update({'iou_overlap':overlap})
@@ -1469,6 +1494,70 @@ class ATeacherTrainer(DefaultTrainer):
         # self.loss_align = {'loss_align': sum(losses) / n}
 
         return {'loss_align': loss_align}
+
+    def check_pseudo_labels(self, proposals_raw, proposals_select, proposals_gt, n_classes=8):
+        labels = ['gt', 'raw50', 'raw75', 'rawn25', 'sel50', 'sel75', 'seln25']
+        counts = torch.zeros((len(labels), n_classes+1)).to(device=proposals_raw[0].pred_boxes.device)
+
+        for img in range(len(proposals_raw)):
+            raw_boxes = proposals_raw[img].pred_boxes
+            select_boxes = proposals_select[img].gt_boxes
+            gt_boxes = proposals_gt[img]['instances_gt'].gt_boxes.to(device=select_boxes.device)
+            raw_labels = proposals_raw[img].pred_classes
+            select_labels = proposals_select[img].gt_classes
+            gt_labels = proposals_gt[img]['instances_gt'].gt_classes.to(device=select_boxes.device)
+
+            raw_ids = [torch.where(raw_labels == x)[0].to(device=select_boxes.device) for x in range(n_classes)]
+            select_ids = [torch.where(select_labels == x)[0].to(device=select_boxes.device) for x in range(n_classes)]
+            gt_ids = [torch.where(gt_labels == x)[0].to(device=select_boxes.device) for x in range(n_classes)]
+
+            pos_raw = torch.eq(gt_labels, raw_labels.unsqueeze(1))
+            match_raw = pairwise_iou(raw_boxes, gt_boxes)
+            max_raw, ids_raw = torch.max(match_raw, 1, keepdim=True)
+            max_only_raw = torch.zeros_like(match_raw)
+            max_only_raw.scatter_(1, ids_raw, max_raw)
+            max_only_raw_pos = max_only_raw * pos_raw
+            morp_050 = max_only_raw_pos >= 0.5
+            morp_075 = max_only_raw_pos >= 0.75
+            max_only_raw_neg = max_only_raw * ~pos_raw
+            morn_025 = max_only_raw_neg >= 0.25
+
+            pos_select = torch.eq(gt_labels, select_labels.unsqueeze(1))
+            match_select = pairwise_iou(select_boxes, gt_boxes)
+            max_select, ids_select = torch.max(match_select, 1, keepdim=True)
+            max_only_select = torch.zeros_like(match_select)
+            max_only_select.scatter_(1, ids_select, max_select)
+            max_only_select_pos = max_only_select * pos_select
+            mosp_050 = max_only_select_pos >= 0.5
+            mosp_075 = max_only_select_pos >= 0.75
+            max_only_select_neg = max_only_select * ~pos_select
+            mosn_025 = max_only_select_neg >= 0.25
+
+            for id in range(len(gt_ids)):
+                counts[0,id] += gt_ids[id].shape[0]
+                counts[1,id] += morp_050[:,gt_ids[id]].sum()
+                counts[2,id] += morp_075[:,gt_ids[id]].sum()
+                counts[3,id] += morn_025[raw_ids[id],:].sum()
+                counts[4,id] += mosp_050[:,gt_ids[id]].sum()
+                counts[5,id] += mosp_075[:,gt_ids[id]].sum()
+                counts[6,id] += mosn_025[select_ids[id],:].sum()
+
+            counts[0,-1] += gt_labels.shape[0]
+            counts[1,-1] += morp_050.sum()
+            counts[2,-1] += morp_075.sum()
+            counts[3,-1] += morn_025.sum()
+            counts[4,-1] += mosp_050.sum()
+            counts[5,-1] += mosp_075.sum()
+            counts[6,-1] += mosn_025.sum()
+
+        self.pseudo_counts += counts.transpose(0,1).flatten().cpu()
+        if (self.iter % self.pseudo_subsampling) == (self.pseudo_subsampling - 1):
+            row = [self.iter] + self.pseudo_counts.tolist() 
+            with open(self.pseudo_stats_file, 'a', newline='') as f_out:
+                csv_writer = csv.writer(f_out, delimiter=' ')
+                csv_writer.writerow(row)
+            self.pseudo_counts *= 0
+
     
 def load_pseudo_dicts(filename):
     with open(filename, 'r') as f_in:
@@ -1614,10 +1703,13 @@ class SinkLoss(nn.Module):
 
 # img_ = unlabel_data_q[0]['image'].transpose(0,1).transpose(1,2)
 
-# v = Visualizer(img_[:, :, [2,1,0]])
-# for box in unlabel_data_q[0]['instances'].gt_boxes.to('cpu'):
+# test_v = Visualizer(img_[:, :, [2,1,0]])
+# unlabel_data_q[0]['instances'].gt_boxes.to('cpu').tensor()
+# for box in :
+#     print(box)
 #     v.draw_box(box)
-# img = v.get_output().img[:, :, [2,1,0]]
+# # v.draw_dataset_dict(unlabel_data_q[0])
+# img = v.get_output().get_image()#.img[:, :, [2,1,0]]
 # plt.figure();plt.imshow(img);plt.show()
 
 
