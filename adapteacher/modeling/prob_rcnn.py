@@ -186,7 +186,8 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         if self.box_predictor.align_proposals and 'supervised' in branch and not self.align_gt_proposals:
             self.process_proposals(box_features, proposals, branch, use_bg=self.use_bg, points_per_proposals=self.points_per_proposals, subsampling=self.sampling)
             # self.keep_proposals[branch] = [predictions[0], cat([p.gt_classes for p in proposals], dim=0)]
-        elif self.box_predictor.align_proposals and 'supervised' in branch and self.align_gt_proposals:
+        elif self.box_predictor.align_proposals and 'supervised' == branch and self.align_gt_proposals:
+        # elif self.box_predictor.align_proposals and 'supervised' in branch and self.align_gt_proposals:
             box_features_gt = self.box_pooler(features, [x.proposal_boxes for x in proposals_gt])
             self.process_proposals(box_features_gt, proposals_gt, branch, use_bg=self.use_bg, points_per_proposals=self.points_per_proposals, subsampling=self.sampling)
         box_features = self.box_head(box_features)
