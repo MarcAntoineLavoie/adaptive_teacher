@@ -380,7 +380,10 @@ class ATeacherTrainer(DefaultTrainer):
                 feat_dim = 512
             else:
                 feat_dim = 512
-            model_student.roi_heads.build_queues(n_classes=n_labels, n_samples=200, feat_dim=feat_dim, base_count=cfg.SEMISUPNET.ALIGN_BASE_COUNT)
+            model_student.roi_heads.build_queues(n_classes=n_labels, n_samples=200, feat_dim=feat_dim, 
+                        base_count=cfg.SEMISUPNET.ALIGN_BASE_COUNT,
+                        # use_prototypes=cfg.SEMISUPNET.ALIGN_PROTOTYPES, only_prototypes=cfg.SEMISUPNET.ALIGN_PROTOTYPES_ONLY,
+                        )
             model_student.roi_heads.align_proposals = self.align_proposals
             model_student.roi_heads.current_proposals = {}
             model_student.roi_heads.use_bg = cfg.SEMISUPNET.ALIGN_USE_BG
@@ -1673,7 +1676,8 @@ class SinkLoss(nn.Module):
         if 'supervised_target' in logits.keys():
             labels_t, feat_t = logits['supervised_target']
         else:
-            labels_t, feat_t = logits['supervised']
+            return 0
+            # labels_t, feat_t = logits['supervised']
 
         if self.select == 'all':
             labels_s = torch.cat(labels_s)
@@ -1690,7 +1694,7 @@ class SinkLoss(nn.Module):
             ids_t = torch.where(labels_t == i)[0]
             ids_sp = torch.where(labels_s == i)[0]
             ids_sn = torch.where(labels_s != i)[0]
-            loss_i = self.loss_func(nfeat_t[ids_t,:],nfeat_s[ids_sp, :]) - self.loss_func(nfeat_t[ids_t,:],nfeat_s[ids_sn, :])*self.use_negatives
+            loss_i = self.loss_func(nfeat_t[ids_t,:],nfeat_s[ids_sp, :]) #- self.loss_func(nfeat_t[ids_t,:],nfeat_s[ids_sn, :])*self.use_negatives
             # losses.append(torch.where(loss_i>0, loss_i, 0))
             losses.append(loss_i)
 
@@ -1926,3 +1930,12 @@ class SinkLoss(nn.Module):
 # plt.xticks(ind+2*width, class_labels)
 # plt.legend(run_labels)
 # plt.tight_layout()
+
+
+# vals_t = nfeat_t[ids_t,:]
+# vals_s = nfeat_s[ids_sp, :]
+
+# dist1 = torch.cdist(vals_t,vals_s).mean()
+# dist2 = torch.cdist(vals_t,vals_t).mean()
+# dist3 = torch.cdist(vals_s,vals_s).mean()
+# final = dist1*2-dist2-dist3
