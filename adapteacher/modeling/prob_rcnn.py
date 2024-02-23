@@ -323,8 +323,8 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
                     vals.append(features[ids2,:])
                     nvals.append(len(ids2))
                 elif subsampling == 'centre':
-                    vals.append(features[:,:,2:5,2:5].reshape(-1,512,9))
-                    nvals.append(9)
+                    vals.append(box_features.transpose(0,1)[:,ids1,2:5,2:5].flatten(1,3).transpose(0,1))
+                    nvals.append(ids1.sum()*9)
             else:
                 vals.append([])
                 nvals.append(0) 
