@@ -1514,44 +1514,53 @@ class ATeacherTrainer(DefaultTrainer):
             select_ids = [torch.where(select_labels == x)[0].to(device=select_boxes.device) for x in range(n_classes)]
             gt_ids = [torch.where(gt_labels == x)[0].to(device=select_boxes.device) for x in range(n_classes)]
 
-            pos_raw = torch.eq(gt_labels, raw_labels.unsqueeze(1))
-            match_raw = pairwise_iou(raw_boxes, gt_boxes)
-            max_raw, ids_raw = torch.max(match_raw, 1, keepdim=True)
-            max_only_raw = torch.zeros_like(match_raw)
-            max_only_raw.scatter_(1, ids_raw, max_raw)
-            max_only_raw_pos = max_only_raw * pos_raw
-            morp_050 = max_only_raw_pos >= 0.5
-            morp_075 = max_only_raw_pos >= 0.75
-            max_only_raw_neg = max_only_raw * ~pos_raw
-            morn_025 = max_only_raw_neg >= 0.25
+            if len(raw_labels):
+                pos_raw = torch.eq(gt_labels, raw_labels.unsqueeze(1))
+                match_raw = pairwise_iou(raw_boxes, gt_boxes)
+                max_raw, ids_raw = torch.max(match_raw, 1, keepdim=True)
+                max_only_raw = torch.zeros_like(match_raw)
+                max_only_raw.scatter_(1, ids_raw, max_raw)
+                max_only_raw_pos = max_only_raw * pos_raw
+                morp_050 = max_only_raw_pos >= 0.5
+                morp_075 = max_only_raw_pos >= 0.75
+                max_only_raw_neg = max_only_raw * ~pos_raw
+                morn_025 = max_only_raw_neg >= 0.25
 
-            pos_select = torch.eq(gt_labels, select_labels.unsqueeze(1))
-            match_select = pairwise_iou(select_boxes, gt_boxes)
-            max_select, ids_select = torch.max(match_select, 1, keepdim=True)
-            max_only_select = torch.zeros_like(match_select)
-            max_only_select.scatter_(1, ids_select, max_select)
-            max_only_select_pos = max_only_select * pos_select
-            mosp_050 = max_only_select_pos >= 0.5
-            mosp_075 = max_only_select_pos >= 0.75
-            max_only_select_neg = max_only_select * ~pos_select
-            mosn_025 = max_only_select_neg >= 0.25
+                for id in range(len(gt_ids)):
+                    counts[0,id] += gt_ids[id].shape[0]
+                    counts[1,id] += morp_050[:,gt_ids[id]].sum()
+                    counts[2,id] += morp_075[:,gt_ids[id]].sum()
+                    counts[3,id] += morn_025[raw_ids[id],:].sum()
+                counts[1,-1] += morp_050.sum()
+                counts[2,-1] += morp_075.sum()
+                counts[3,-1] += morn_025.sum()
+            
+            if len(select_labels):
+                pos_select = torch.eq(gt_labels, select_labels.unsqueeze(1))
+                match_select = pairwise_iou(select_boxes, gt_boxes)
+                max_select, ids_select = torch.max(match_select, 1, keepdim=True)
+                max_only_select = torch.zeros_like(match_select)
+                max_only_select.scatter_(1, ids_select, max_select)
+                max_only_select_pos = max_only_select * pos_select
+                mosp_050 = max_only_select_pos >= 0.5
+                mosp_075 = max_only_select_pos >= 0.75
+                max_only_select_neg = max_only_select * ~pos_select
+                mosn_025 = max_only_select_neg >= 0.25
+
+                for id in range(len(gt_ids)):
+                    counts[4,id] += mosp_050[:,gt_ids[id]].sum()
+                    counts[5,id] += mosp_075[:,gt_ids[id]].sum()
+                    counts[6,id] += mosn_025[select_ids[id],:].sum()
+
+                counts[4,-1] += mosp_050.sum()
+                counts[5,-1] += mosp_075.sum()
+                counts[6,-1] += mosn_025.sum()
 
             for id in range(len(gt_ids)):
                 counts[0,id] += gt_ids[id].shape[0]
-                counts[1,id] += morp_050[:,gt_ids[id]].sum()
-                counts[2,id] += morp_075[:,gt_ids[id]].sum()
-                counts[3,id] += morn_025[raw_ids[id],:].sum()
-                counts[4,id] += mosp_050[:,gt_ids[id]].sum()
-                counts[5,id] += mosp_075[:,gt_ids[id]].sum()
-                counts[6,id] += mosn_025[select_ids[id],:].sum()
 
             counts[0,-1] += gt_labels.shape[0]
-            counts[1,-1] += morp_050.sum()
-            counts[2,-1] += morp_075.sum()
-            counts[3,-1] += morn_025.sum()
-            counts[4,-1] += mosp_050.sum()
-            counts[5,-1] += mosp_075.sum()
-            counts[6,-1] += mosn_025.sum()
+
 
         self.pseudo_counts += counts.transpose(0,1).flatten().cpu()
         if (self.iter % self.pseudo_subsampling) == (self.pseudo_subsampling - 1):
