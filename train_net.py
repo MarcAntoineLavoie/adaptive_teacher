@@ -135,6 +135,7 @@ if __name__ == "__main__":
     # args.output_dir = 'output/test_v2_align_contrast100/'
     # args.output_dir = 'output/test_v2_align_contrast010_temp100/'
     # args.output_dir = 'output/test_v2_align_contrast010_gtprops/'
+    # args.output_dir = 'output/test_v2_short_align010_centre_gtprops_mmd/'
 
     # args.use_old_cfg = True
     args.use_old_cfg = False
