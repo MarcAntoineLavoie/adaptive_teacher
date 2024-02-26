@@ -1527,7 +1527,6 @@ class ATeacherTrainer(DefaultTrainer):
                 morn_025 = max_only_raw_neg >= 0.25
 
                 for id in range(len(gt_ids)):
-                    counts[0,id] += gt_ids[id].shape[0]
                     counts[1,id] += morp_050[:,gt_ids[id]].sum()
                     counts[2,id] += morp_075[:,gt_ids[id]].sum()
                     counts[3,id] += morn_025[raw_ids[id],:].sum()
