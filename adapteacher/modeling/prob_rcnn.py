@@ -183,13 +183,13 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
     ) -> Union[Dict[str, torch.Tensor], List[Instances]]:
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
-        if self.box_predictor.align_proposals and 'supervised' in branch and not self.align_gt_proposals:
-            self.process_proposals(box_features, proposals, branch, use_bg=self.use_bg, points_per_proposals=self.points_per_proposals, subsampling=self.sampling)
-            # self.keep_proposals[branch] = [predictions[0], cat([p.gt_classes for p in proposals], dim=0)]
-        elif self.box_predictor.align_proposals and 'supervised' == branch and self.align_gt_proposals:
+        if self.box_predictor.align_proposals and 'supervised' == branch and self.align_gt_proposals:
         # elif self.box_predictor.align_proposals and 'supervised' in branch and self.align_gt_proposals:
             box_features_gt = self.box_pooler(features, [x.proposal_boxes for x in proposals_gt])
             self.process_proposals(box_features_gt, proposals_gt, branch, use_bg=self.use_bg, points_per_proposals=self.points_per_proposals, subsampling=self.sampling)
+        elif self.box_predictor.align_proposals and 'supervised' in branch:
+            self.process_proposals(box_features, proposals, branch, use_bg=self.use_bg, points_per_proposals=self.points_per_proposals, subsampling=self.sampling)
+            # self.keep_proposals[branch] = [predictions[0], cat([p.gt_classes for p in proposals], dim=0)]
         box_features = self.box_head(box_features)
         if self.box_predictor.compute_bbox_cov and branch == 'supervised':
             predictions = self.box_predictor(box_features, proposals=proposals)
@@ -342,6 +342,9 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         self.register_buffer('target_counts', torch.ones(n_classes)*base_count)
         self.l_queue = n_samples
 
+    def build_prototypes(self, n_classes, feat_dim):
+        self.register_buffer("queue_source", torch.randn(n_classes, feat_dim))
+
     def sample_queue(self, branch, vals, nvals, max_samples=200, device=None):
         if branch == 'supervised':
             queue = self.queue_source
@@ -398,6 +401,11 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
                 pass
             else:
                 queue[label,:,:] = cat((vals[label].detach().cpu(),queue[label,n:,:]))
+
+    def update_prototypes(self, vals):
+        for label in range(len(vals)):
+            # for proposal in vals[label]
+            pass
     
 
 class ProbabilisticFastRCNNOutputLayers(nn.Module):
@@ -444,6 +452,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
         select_iou=False,
         align_use_proj=True,
         box_norm_class=False,
+        suppress_box=1.0
     ):
         """
         NOTE: this interface is experimental.
@@ -563,6 +572,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             self.proj_head = ProjectionHead(feat_dim=feat_dim, use_proj=self.use_proj, normed=normed_proj)
 
         self.select_iou = select_iou
+        self.suppress_box = suppress_box
 
     @classmethod
     def from_config(cls,
@@ -612,6 +622,7 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
             "select_iou": cfg.MODEL.PROBABILISTIC_MODELING.SELECT_IOU2,
             "align_use_proj": cfg.SEMISUPNET.ALIGN_USE_PROJ,
             "box_norm_class": cfg.SEMISUPNET.BOX_NORM_CLASS,
+            "suppress_box": cfg.SEMISUPNET.SUPPRESS_BBOX_CORR,
         }
 
     def forward(self, x, proposals=None):
@@ -927,6 +938,9 @@ class ProbabilisticFastRCNNOutputLayers(nn.Module):
                                               self.smooth_l1_beta,
                                               reduction="sum",)
                 loss_box_reg = loss_box_reg / loss_reg_normalizer
+
+        if branch == 'supervised_target':
+            loss_box_reg *= self.suppress_box
 
         if self.domain_invariant_inst:
             if current_step >= self.burnup_steps:
