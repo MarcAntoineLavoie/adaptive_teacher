@@ -653,8 +653,8 @@ class ATeacherTrainer(DefaultTrainer):
         # label_strong, label_weak, unlabed_strong, unlabled_weak
         if self.cfg.INPUT.CLEAN_DETECTIONS:
             label_data_q, label_data_k, label_regions, unlabel_data_q, unlabel_data_k, unlabel_regions = data
-            label_data_q = self.clean_detections(label_data_q, label_regions)
-            unlabel_data_q = self.clean_detections(unlabel_data_q, unlabel_regions)
+            label_data_q, _ = self.clean_detections(label_data_q, label_regions)
+            unlabel_data_q, old_boxes = self.clean_detections(unlabel_data_q, unlabel_regions, output_old=True)
         else:
             label_data_q, label_data_k, unlabel_data_q, unlabel_data_k = data
 
@@ -779,6 +779,9 @@ class ATeacherTrainer(DefaultTrainer):
             unlabel_data_k = self.add_label(
                 unlabel_data_k, joint_proposal_dict["proposals_pseudo_roih"]
             )
+
+            if self.cfg.INPUT.CLEAN_DETECTIONS:
+                unlabel_data_q, old_pseudo_boxes = self.clean_detections(unlabel_data_q, unlabel_regions, output_old=True)
 
             all_label_data = label_data_q + label_data_k
             all_unlabel_data = unlabel_data_q
@@ -987,18 +990,24 @@ class ATeacherTrainer(DefaultTrainer):
             ret.append(hooks.PeriodicWriter(self.build_writers(), period=20))
         return ret
 
-    def clean_detections(self, data_strong, regions):
+    def clean_detections(self, data_strong, regions, output_old=False):
+        if output_old:
+            old_boxes = [x['instances'].gt_boxes.clone() for x in data_strong]
+        else:
+            old_boxes = None
         for idx in range(len(data_strong)):
             bbox_regions = torch.tensor([x for x in regions[idx] if x])
             if not bbox_regions.shape[0]:
                 continue
-            bbox_regions[:,2:] = bbox_regions[:,2:] + bbox_regions[:,:2]
+
             bbox_gt = data_strong[idx]['instances'].gt_boxes.tensor
+            bbox_regions[:,2:] = bbox_regions[:,2:] + bbox_regions[:,:2]
+            bbox_regions = bbox_regions.to(device=bbox_gt.device)
 
             m = bbox_gt.shape[0]
             n = bbox_regions.shape[0]
             if n > 0:
-                cs1 = torch.zeros((m,n,4))
+                cs1 = torch.zeros((m,n,4)).to(device=bbox_gt.device)
                 cs1[:,:,2:] = torch.min(bbox_gt[:, None, 2:], bbox_regions[:, 2:])
                 cs1[:,:,:2] = torch.max(bbox_gt[:, None, :2], bbox_regions[:, :2])
                 dcs1 = cs1[:,:,2:] - cs1[:,:,:2]
@@ -1008,7 +1017,7 @@ class ATeacherTrainer(DefaultTrainer):
 
                 if n > 1:
                     n2 = comb(n,2)
-                    cs2 = torch.zeros((m,n2,4))
+                    cs2 = torch.zeros((m,n2,4)).to(device=bbox_gt.device)
                     lv1 = 0
                     for lv2 in range(n-1):
                         for lv3 in range(lv2+1,n):    
@@ -1022,7 +1031,7 @@ class ATeacherTrainer(DefaultTrainer):
 
                     if n > 2:
                         n3 = comb(n,3)
-                        cs3 = torch.zeros((m,1,4))
+                        cs3 = torch.zeros((m,1,4)).to(device=bbox_gt.device)
                         # lv1 = 0
                         # for lv2 in range(n2-2):
                         #     for lv2 in range(lv2,n3-1):
@@ -1039,6 +1048,8 @@ class ATeacherTrainer(DefaultTrainer):
 
                 areas = (bbox_gt[:,2:] - bbox_gt[:,:2]).prod(dim=1)
                 valid_boxes = (intersection / areas) < self.cfg.INPUT.MAX_OCCLUSION
+                if not all(valid_boxes) and output_old:
+                    a=1
 
                 deltas = dcs1*check1
                 new_bboxes = bbox_gt.clone()
@@ -1062,7 +1073,7 @@ class ATeacherTrainer(DefaultTrainer):
                 #     a = 1
                 data_strong[idx]['instances'] = data_strong[idx]['instances'][valid_boxes]
             
-        return data_strong    
+        return data_strong, old_boxes
 
     def build_hooks_final(self):
         cfg = self.cfg.clone()
@@ -1709,20 +1720,36 @@ class SinkLoss(nn.Module):
         loss = sum(losses)/len(losses)*self.scale
        
         return loss
+    
+def temp_plots():
+    import matplotlib.pyplot as plt
+    from detectron2.utils.visualizer import Visualizer
+    curr_id = 0
+    curr_data = unlabel_data_q
+    img_ = curr_data[curr_id]['image'].transpose(0,1).transpose(1,2)
 
-# import matplotlib.pyplot as plt
-# from detectron2.utils.visualizer import Visualizer
-# curr_id = 1
-# img_ = all_label_data[curr_id]['image'].transpose(0,1).transpose(1,2)
+    test_v = Visualizer(img_[:, :, [2,1,0]])
+    temp = curr_data[curr_id]['instances'].gt_boxes
+    temp.tensor = temp.tensor.cpu()
+    test_v.overlay_instances(boxes=temp)
+    img = test_v.get_output().get_image()
 
-# test_v = Visualizer(img_[:, :, [2,1,0]])
-# # boxes = label_data_q[1]['instances'].gt_boxes.to('cpu').tensor()
-# # for box in boxes:
-# #     print(box)
-# #     v.draw_box(box)
-# test_v.overlay_instances(boxes=all_label_data[curr_id]['instances'].gt_boxes)
-# img = test_v.get_output().get_image()#.img[:, :, [2,1,0]]
-# plt.figure();plt.imshow(img);plt.show()
+    test_v2 = Visualizer(img_[:, :, [2,1,0]])
+    temp2 = curr_data[curr_id]['instances_gt'].gt_boxes
+    temp2.tensor = temp2.tensor.cpu()
+    test_v2.overlay_instances(boxes=temp2)
+    img2 = test_v2.get_output().get_image()
+
+    test_v3= Visualizer(img_[:, :, [2,1,0]])
+    temp3 = old_boxes[curr_id]
+    temp3.tensor = temp3.tensor.cpu()
+    test_v3.overlay_instances(boxes=temp3)
+    img3 = test_v2.get_output().get_image()
+
+    plt.figure();plt.imshow(img)
+    plt.figure();plt.imshow(img2)
+    plt.figure();plt.imshow(img3)
+    plt.show()
 
 
         # # compute mean of log-likelihood over positive
