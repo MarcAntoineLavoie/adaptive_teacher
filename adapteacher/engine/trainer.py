@@ -1514,9 +1514,9 @@ class ATeacherTrainer(DefaultTrainer):
             select_ids = [torch.where(select_labels == x)[0].to(device=select_boxes.device) for x in range(n_classes)]
             gt_ids = [torch.where(gt_labels == x)[0].to(device=select_boxes.device) for x in range(n_classes)]
 
-            if len(raw_labels):
-                pos_raw = torch.eq(gt_labels, raw_labels.unsqueeze(1))
-                match_raw = pairwise_iou(raw_boxes, gt_boxes)
+            pos_raw = torch.eq(gt_labels, raw_labels.unsqueeze(1))
+            match_raw = pairwise_iou(raw_boxes, gt_boxes)
+            if all([x > 0 for x in match_raw.shape]):
                 max_raw, ids_raw = torch.max(match_raw, 1, keepdim=True)
                 max_only_raw = torch.zeros_like(match_raw)
                 max_only_raw.scatter_(1, ids_raw, max_raw)
@@ -1534,9 +1534,9 @@ class ATeacherTrainer(DefaultTrainer):
                 counts[2,-1] += morp_075.sum()
                 counts[3,-1] += morn_025.sum()
             
-            if len(select_labels):
-                pos_select = torch.eq(gt_labels, select_labels.unsqueeze(1))
-                match_select = pairwise_iou(select_boxes, gt_boxes)
+            pos_select = torch.eq(gt_labels, select_labels.unsqueeze(1))
+            match_select = pairwise_iou(select_boxes, gt_boxes)
+            if all([x > 0 for x in match_select.shape]):
                 max_select, ids_select = torch.max(match_select, 1, keepdim=True)
                 max_only_select = torch.zeros_like(match_select)
                 max_only_select.scatter_(1, ids_select, max_select)
@@ -1712,16 +1712,16 @@ class SinkLoss(nn.Module):
 
 # import matplotlib.pyplot as plt
 # from detectron2.utils.visualizer import Visualizer
-
-# img_ = unlabel_data_q[0]['image'].transpose(0,1).transpose(1,2)
+# curr_id = 1
+# img_ = all_label_data[curr_id]['image'].transpose(0,1).transpose(1,2)
 
 # test_v = Visualizer(img_[:, :, [2,1,0]])
-# unlabel_data_q[0]['instances'].gt_boxes.to('cpu').tensor()
-# for box in :
-#     print(box)
-#     v.draw_box(box)
-# # v.draw_dataset_dict(unlabel_data_q[0])
-# img = v.get_output().get_image()#.img[:, :, [2,1,0]]
+# # boxes = label_data_q[1]['instances'].gt_boxes.to('cpu').tensor()
+# # for box in boxes:
+# #     print(box)
+# #     v.draw_box(box)
+# test_v.overlay_instances(boxes=all_label_data[curr_id]['instances'].gt_boxes)
+# img = test_v.get_output().get_image()#.img[:, :, [2,1,0]]
 # plt.figure();plt.imshow(img);plt.show()
 
 
