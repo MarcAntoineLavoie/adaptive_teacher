@@ -128,6 +128,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         prob_iou=False,
         select_iou=False,
         targets_gt=None,
+        use_gt_only=False,
     ) -> Tuple[List[Instances], Dict[str, torch.Tensor]]:
 
         del images
@@ -136,7 +137,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             # 1000 --> 512
 
             if targets_gt is not None:
-                proposals_gt = self.label_and_sample_proposals(proposals, targets_gt, branch=branch, gt_only=True)
+                proposals_gt = self.label_and_sample_proposals(proposals, targets_gt, branch=branch, use_gt_only=use_gt_only)
             else:
                 proposals_gt = None
 
@@ -160,6 +161,9 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             losses, _ = self._forward_box(
                 features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup, current_step=current_step, proposals_gt=proposals_gt,
             )
+            n = len(proposals[0])
+            for i in range(len(proposals)):
+                proposals[i].class_logits = torch.nn.functional.softmax(_[0][i*n:(i+1)*n], dim=1)
             return proposals, losses
         else:
             pred_instances, predictions = self._forward_box(
@@ -229,7 +233,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
 
     @torch.no_grad()
     def label_and_sample_proposals(
-        self, proposals: List[Instances], targets: List[Instances], branch: str = "", gt_only=False,
+        self, proposals: List[Instances], targets: List[Instances], branch: str = "", use_gt_only=False,
     ) -> List[Instances]:
         gt_boxes = [x.gt_boxes for x in targets]
         is_gt = [torch.zeros(len(x)) for x in proposals]
@@ -237,7 +241,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             n_preds = [len(x) for x in proposals]
             proposals = add_ground_truth_to_proposals(gt_boxes, proposals)
             is_gt = [torch.cat((y,torch.ones(len(x)-len(y)))) for x, y in zip(proposals, is_gt)]
-            if gt_only:
+            if use_gt_only:
                 proposals = [prop[n:] for prop, n in zip(proposals, n_preds)]
 
         proposals_with_gt = []
@@ -261,6 +265,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
                 sampled_targets = matched_idxs[sampled_idxs]
                 proposal_type = from_gt.to(device=proposals_per_image.gt_classes.device)[sampled_idxs] + (proposals_per_image.gt_classes < max(gt_classes)).long()
                 proposals_per_image.proposal_type = proposal_type
+                proposals_per_image.orig_box = sampled_idxs
                 for (trg_name, trg_value) in targets_per_image.get_fields().items():
                     if trg_name.startswith("gt_") and not proposals_per_image.has(
                         trg_name
@@ -279,6 +284,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
                 )
                 proposals_per_image.gt_boxes = gt_boxes
                 proposals_per_image.proposal_type = torch.zeros(len(sampled_idxs)).to(device=proposals_per_image.gt_boxes.device)
+                proposals_per_image.orig_box = -1*torch.ones(len(sampled_idxs)).to(device=proposals_per_image.gt_boxes.device)
 
             num_bg_samples.append((gt_classes == self.num_classes).sum().item())
             num_fg_samples.append(gt_classes.numel() - num_bg_samples[-1])
@@ -287,7 +293,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
                 proposals_per_image = proposals_per_image[ids]
             proposals_with_gt.append(proposals_per_image)
 
-        if "supervised" in branch and not gt_only:
+        if "supervised" in branch and not use_gt_only:
             storage = get_event_storage()
             storage.put_scalar(
                 "roi_head/num_target_fg_samples_" + branch, np.mean(num_fg_samples)
@@ -1246,6 +1252,16 @@ class NormedLinear(nn.Module):
     
 
 # import matplotlib.pyplot as plt
+
+# pool_features_gt = self.box_pooler(features, [x.proposal_boxes for x in proposals_gt[0]])
+# box_features_gt = self.box_head(pool_features_gt)
+# if self.box_predictor.compute_bbox_cov and branch == 'supervised':
+#     predictions = self.box_predictor(box_features_gt, proposals=proposals_gt)
+# else:
+#     predictions = self.box_predictor(box_features_gt)
+
+
+
 
 # v2 = 666/20
 # v1 = 1333/41

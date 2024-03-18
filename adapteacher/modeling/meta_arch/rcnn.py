@@ -601,7 +601,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         return images, images_t
 
     def forward(
-        self, batched_inputs, branch="supervised", given_proposals=None, val_mode=False
+        self, batched_inputs, branch="supervised", given_proposals=None, val_mode=False, use_gt_only=False
     ):
         """
         Args:
@@ -691,9 +691,8 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             proposals_rpn, proposal_losses = self.proposal_generator(
                 images, features, gt_instances
             )
-
             # roi_head lower branch
-            _, detector_losses = self.roi_heads(
+            proposals_roih, detector_losses = self.roi_heads(
                 images,
                 features,
                 proposals_rpn,
@@ -704,6 +703,8 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 current_step=self.iter,
                 targets_gt=gt_instances_fixed,
             )
+            self.proposals_rpn_temp = proposals_rpn
+            self.proposals_roih_temp = proposals_roih
 
             # visualization
             if self.vis_period > 0:
@@ -739,6 +740,7 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 branch=branch,
                 unsup=True,
                 targets_gt=gt_instances_fixed,
+                use_gt_only=use_gt_only,
             )
 
             # visualization
@@ -759,9 +761,14 @@ class ProbDATwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             unsupervised weak branch: input image without any ground-truth label; output proposals of rpn and roi-head
             """
             # Region proposal network
-            proposals_rpn, _ = self.proposal_generator( 
-                images, features, None, compute_loss=False
-            )
+            if 1:
+                proposals_rpn, _ = self.proposal_generator( 
+                    images, features, None, compute_loss=False
+                )
+            else:
+                proposals_rpn, _, self.scores, self.keeps = self.proposal_generator( 
+                    images, features, None, compute_loss=False
+                )
 
             # roi_head lower branch (keep this for further production)
             # notice that we do not use any target in ROI head to do inference!

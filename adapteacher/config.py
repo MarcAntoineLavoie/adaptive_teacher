@@ -65,6 +65,8 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.BOX_NORM_CLASS = False
     _C.SEMISUPNET.EVAL_PSEUDO_LABELS = False
     _C.SEMISUPNET.SUPPRESS_BBOX_CORR = 1.0
+    _C.SEMISUPNET.PSEUDO_THRESH_BOTH = False
+    _C.SEMISUPNET.PSEUDO_OBJ_THRESH = 1.0
 
     # dataloader
     # supervision level

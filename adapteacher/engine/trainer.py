@@ -68,6 +68,8 @@ import numpy
 import os
 from itertools import chain
 import csv
+from adapteacher.evaluation.grad_cam import GradCAM
+import cv2
 
 # Supervised-only Trainer
 class BaselineTrainer(DefaultTrainer):
@@ -410,6 +412,9 @@ class ATeacherTrainer(DefaultTrainer):
         self.use_gt_proposals = cfg.SEMISUPNET.USE_GT_PROPOSALS
         self.use_gt_proposals_only = cfg.SEMISUPNET.USE_GT_PROPOSALS_ONLY
         self.align_gt_proposals = cfg.SEMISUPNET.ALIGN_GT_PROPOSALS
+        self.thresh_both = cfg.SEMISUPNET.PSEUDO_THRESH_BOTH
+        self.thresh_object = cfg.SEMISUPNET.PSEUDO_OBJ_THRESH
+
 
         self.eval_pseudo_labels = cfg.SEMISUPNET.EVAL_PSEUDO_LABELS
         if self.eval_pseudo_labels:
@@ -424,7 +429,38 @@ class ATeacherTrainer(DefaultTrainer):
                 with open(self.pseudo_stats_file, 'w') as f_out:
                     csv_writer = csv.writer(f_out, delimiter=' ')
                     csv_writer.writerow(columns)
+
+        # self.target_layer_name = ['backbone.vgg2.8','backbone.vgg3.8','backbone.vgg4.8','proposal_generator.rpn_head.conv']
+        # self.activations_grads = []
+        # self._register_grad_hook()
+        # self.activations = []
+        # self.gradient = []
                 
+    def _get_activations_hook(self, module, input, output):
+        # self.activations = output
+        self.activations.append(output)
+
+    def _get_grads_hook(self, module, input_grad, output_grad):
+        # self.gradient = output_grad[0]
+        self.gradient.append(output_grad[0])
+
+    def _register_grad_hook(self):
+        for (name, module) in self.model_teacher.named_modules():
+        # for (name, module) in self.model.named_modules():
+            # if name == self.target_layer_name:
+            if name in self.target_layer_name:
+                self.activations_grads.append(module.register_forward_hook(self._get_activations_hook))
+                self.activations_grads.append(module.register_backward_hook(self._get_grads_hook))
+        return True
+        print(f"Layer {self.target_layer_name} not found in Model!")
+
+    def _postprocess_cam(self, raw_cam, img_width, img_height):
+        cam_orig = np.sum(raw_cam, axis=0)  # [H,W]
+        cam_orig = np.maximum(cam_orig, 0)  # ReLU
+        cam_orig -= np.min(cam_orig)
+        cam_orig /= np.max(cam_orig)
+        cam = cv2.resize(cam_orig, (img_width, img_height))
+        return cam, cam_orig
 
     def resume_or_load(self, resume=True):
         """
@@ -539,7 +575,10 @@ class ATeacherTrainer(DefaultTrainer):
                 valid_map
             ]
         elif proposal_type == "roih":
-            valid_map = proposal_bbox_inst.scores > thres
+            if self.thresh_both:
+                valid_map = torch.logical_and(proposal_bbox_inst.scores > thres, proposal_bbox_inst.rpn_score > self.thresh_object)
+            else:
+                valid_map = proposal_bbox_inst.scores > thres
             # valid_map2 = (proposal_bbox_inst.iou > thres) * (proposal_bbox_inst.rpn_score > 0.3)
             # overlap = sum(valid_map==valid_map2)**2/(sum(valid_map)*sum(valid_map))
 
@@ -729,13 +768,38 @@ class ATeacherTrainer(DefaultTrainer):
             unlabel_data_k = self.remove_label(unlabel_data_k)
 
             #  1. generate the pseudo-label using teacher model
-            with torch.no_grad():
+
+            if 1:
+                with torch.no_grad():
+                    (
+                        _,
+                        proposals_rpn_unsup_k,
+                        proposals_roih_unsup_k,
+                        _,
+                    ) = self.model_teacher(unlabel_data_k, branch="unsup_data_weak")
+            else:
                 (
                     _,
                     proposals_rpn_unsup_k,
                     proposals_roih_unsup_k,
                     _,
                 ) = self.model_teacher(unlabel_data_k, branch="unsup_data_weak")
+                # single_box = proposals_rpn_unsup_k[0].objectness_logits[0]
+                # single_box.backward()
+                # gradient = self.gradient[0].cpu().data.numpy()  # [C,H,W]
+                # activations = self.activations[0].cpu().data.numpy()  # [C,H,W]
+                # weight = np.mean(gradient, axis=(1, 2))  # [C]
+
+                # cam = activations * weight[:, np.newaxis, np.newaxis]  # [C,H,W]
+                # cam, cam_orig = self._postprocess_cam(cam, unlabel_data_k[0]["width"], unlabel_data_k[0]["height"])
+
+                # from adapteacher.evaluation.grad_cam import *
+                # with GradCAM(model=self.model_teacher,
+                #             target_layers=target_layers,
+                #             use_cuda=torch.cuda.is_available()) as cam:
+                #     grayscale_cam = cam(input_tensor=input_tensor,
+                #                         targets=targets)[0, :]
+                #     cam_image = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True)
 
             ######################## For probe #################################
             # import pdb; pdb. set_trace() 
@@ -783,18 +847,29 @@ class ATeacherTrainer(DefaultTrainer):
             if self.cfg.INPUT.CLEAN_DETECTIONS:
                 unlabel_data_q, old_pseudo_boxes = self.clean_detections(unlabel_data_q, unlabel_regions, output_old=True)
 
+            if any(any(i in x['instances_gt'].gt_classes.tolist() for i in [1,7]) for x in unlabel_data_q):
+            # if any(any(i in x['instances_gt'].gt_classes.tolist() for i in [3,4,5]) for x in unlabel_data_q):
+                a = 1
+
             all_label_data = label_data_q + label_data_k
             all_unlabel_data = unlabel_data_q
 
             # 4. input both strongly and weakly augmented labeled data into student model
-            record_all_label_data, _, _, _ = self.model(
-                all_label_data, branch="supervised"
-            )
-            record_dict.update(record_all_label_data)
+            if 1:
+                record_all_label_data, _, _, _ = self.model(
+                    all_label_data, branch="supervised", use_gt_only=False
+                )
+                record_dict.update(record_all_label_data)
+            else:
+                with torch.no_grad():
+                    record_all_label_data, _, _, _ = self.model(
+                    all_label_data, branch="supervised"
+                    )
+                    record_dict.update(record_all_label_data)
 
             # 5. input strongly augmented unlabeled data into model
             record_all_unlabel_data, _, _, _ = self.model(
-                all_unlabel_data, branch="supervised_target"
+                all_unlabel_data, branch="supervised_target", use_gt_only=self.use_gt_proposals_only
             )
             new_record_all_unlabel_data = {}
             for key in record_all_unlabel_data.keys():
@@ -1048,8 +1123,8 @@ class ATeacherTrainer(DefaultTrainer):
 
                 areas = (bbox_gt[:,2:] - bbox_gt[:,:2]).prod(dim=1)
                 valid_boxes = (intersection / areas) < self.cfg.INPUT.MAX_OCCLUSION
-                if not all(valid_boxes) and output_old:
-                    a=1
+                # if not all(valid_boxes) and output_old:
+                #     a=1
 
                 deltas = dcs1*check1
                 new_bboxes = bbox_gt.clone()
@@ -1724,32 +1799,117 @@ class SinkLoss(nn.Module):
 def temp_plots():
     import matplotlib.pyplot as plt
     from detectron2.utils.visualizer import Visualizer
+    names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
     curr_id = 0
-    curr_data = unlabel_data_q
+    curr_data = unlabel_data_k
+    # curr_data = all_label_data
     img_ = curr_data[curr_id]['image'].transpose(0,1).transpose(1,2)
 
     test_v = Visualizer(img_[:, :, [2,1,0]])
     temp = curr_data[curr_id]['instances'].gt_boxes
+    labels = [names[x] for x in curr_data[curr_id]['instances'].gt_classes.tolist()]
+    # temp = proposals_roih_unsup_k[curr_id].pred_boxes
     temp.tensor = temp.tensor.cpu()
-    test_v.overlay_instances(boxes=temp)
+    test_v.overlay_instances(boxes=temp, labels=labels)
     img = test_v.get_output().get_image()
 
     test_v2 = Visualizer(img_[:, :, [2,1,0]])
     temp2 = curr_data[curr_id]['instances_gt'].gt_boxes
+    labels2 = [names[x] for x in curr_data[curr_id]['instances_gt'].gt_classes.tolist()]
+    # test_v2 = Visualizer(label_data_k[curr_id]['image'].transpose(0,1).transpose(1,2)[:, :, [2,1,0]])
+    # temp2 = label_data_k[curr_id]['instances'].gt_boxes
     temp2.tensor = temp2.tensor.cpu()
-    test_v2.overlay_instances(boxes=temp2)
+    test_v2.overlay_instances(boxes=temp2, labels=labels2)
     img2 = test_v2.get_output().get_image()
 
-    test_v3= Visualizer(img_[:, :, [2,1,0]])
-    temp3 = old_boxes[curr_id]
+    # test_v3= Visualizer(img_[:, :, [2,1,0]])
+    # temp3 = old_pseudo_boxes[curr_id]
+    # temp3.tensor = temp3.tensor.cpu()
+    # test_v3.overlay_instances(boxes=temp3)
+    # img3 = test_v3.get_output().get_image()
+
+    test_v3 = Visualizer(img_[:, :, [2,1,0]])
+    ids3 = torch.where(torch.logical_and(proposals_roih_unsup_k[curr_id].rpn_score > 1.0, proposals_roih_unsup_k[curr_id].scores > 0.7))[0]
+    temp3 = proposals_roih_unsup_k[curr_id][ids3].pred_boxes
+    labels3 = [names[x] for x in proposals_roih_unsup_k[curr_id][ids3].pred_classes.tolist()]
     temp3.tensor = temp3.tensor.cpu()
-    test_v3.overlay_instances(boxes=temp3)
-    img3 = test_v2.get_output().get_image()
+    # ids = torch.where(self.model.proposals_roih_temp[curr_id].gt_classes<8)[0]
+    # temp3 = self.model.proposals_roih_temp[curr_id].proposal_boxes[ids]
+    # logits_temp = self.model.proposals_roih_temp[curr_id].class_logits[ids]
+    # logits3 = torch.gather(logits_temp, 1, self.model.proposals_roih_temp[curr_id].gt_classes[ids].unsqueeze(1))
+    # new_ids = torch.where(logits3>0.8)[0]
+    # temp3.tensor = temp3.tensor.cpu()[new_ids,:]
+    # labels3 = self.model.proposals_roih_temp[curr_id].gt_classes[ids][new_ids].tolist()
+    test_v3.overlay_instances(boxes=temp3, labels=labels3)
+    # boxes = Boxes(torch.cat((temp3[sel_id].tensor, self.model.proposals_roih_temp[curr_id].gt_boxes[sel_id].tensor.detach().cpu())))
+    # test_v3.overlay_instances(boxes=boxes, labels=[labels3[sel_id], self.model.proposals_roih_temp[curr_id].gt_classes[sel_id].detach().cpu().item()])
+    img3 = test_v3.get_output().get_image()
+
+    n = 100
+    labels4 = list(range(n))
+    # n = 100
+    # labels4 = [n]
+    test_v4 = Visualizer(img_[:, :, [2,1,0]])
+    # temp4 = pesudo_proposals_rpn_unsup_k[curr_id].gt_boxes
+    temp4 = proposals_rpn_unsup_k[curr_id].proposal_boxes
+    # temp4 = self.model.proposals_rpn_temp[curr_id].proposal_boxes
+    temp4.tensor = temp4.tensor.cpu()
+    test_v4.overlay_instances(boxes=temp4[:n], labels=labels4)
+    # test_v4.overlay_instances(boxes=temp4[n], labels=labels4)
+    img4 = test_v4.get_output().get_image()
 
     plt.figure();plt.imshow(img)
     plt.figure();plt.imshow(img2)
     plt.figure();plt.imshow(img3)
+    plt.figure();plt.imshow(img4)
     plt.show()
+
+def temp_cam():
+    self.gradient = []
+    import cv2
+    # sel_id = 4
+    # sel_id2 = self.model.proposals_roih_temp[curr_id].orig_box[new_ids][sel_id]
+    grad_layer = 2
+    # c,h,w = unlabel_data_k[curr_id]['image'].shape
+    c,h,w = all_label_data[curr_id]['image'].shape
+    # single_box = proposals_rpn_unsup_k[curr_id].objectness_logits[sel_id]
+    # single_box = self.model.proposals_rpn_temp[curr_id][12].objectness_logits
+    maxes = self.model.proposal_generator.pred_objectness_logits[0][curr_id,:,:,:].max(dim=0)[0]
+    single_box = maxes[2,5]
+    # single_box = self.model.proposal_generator.pred_objectness_logits[0][curr_id,:,:,:][5,7,26]
+    # single_box = logits3[new_ids][sel_id]
+    single_box.backward(retain_graph=True)
+    self.gradient.reverse()
+    gradient = self.gradient[grad_layer][curr_id,:,:,:].squeeze().cpu().data.numpy()  # [C,H,W]
+    activations = self.activations[grad_layer][curr_id,:,:,:].squeeze().cpu().data.numpy()  # [C,H,W]
+    weight = np.mean(gradient, axis=(1, 2))  # [C]
+    cam = activations * weight[:, np.newaxis, np.newaxis]  # [C,H,W]
+    cam, cam_orig = self._postprocess_cam(cam, w, h)
+
+    test_cam = Visualizer(cam*255)
+    test_cam.overlay_instances(boxes=temp4[:n], labels=labels4)
+
+    test_both = Visualizer(img_[:, :, [2,1,0]]*cam[:,:,np.newaxis])
+    test_both.overlay_instances(boxes=temp4[:n], labels=labels4)
+    img_both = test_both.get_output().get_image()
+
+    img_cam = test_cam.get_output().get_image()
+    plt.figure();plt.imshow(img_cam)
+    # plt.figure();plt.imshow(img_both)
+    plt.figure();plt.imshow(img4)
+    plt.show()
+    
+    curr_id = 2
+    test = self.activations[0][curr_id,:,:,:].sum(dim=0).cpu().data.numpy()
+    plt.figure();plt.imshow(test)
+    test = self.activations[1][curr_id,:,:,:].sum(dim=0).cpu().data.numpy()
+    plt.figure();plt.imshow(test)
+    test = self.activations[2][curr_id,:,:,:].sum(dim=0).cpu().data.numpy()
+    plt.figure();plt.imshow(test)
+    test = self.activations[3][curr_id,:,:,:].sum(dim=0).cpu().data.numpy()
+    plt.figure();plt.imshow(test)
+    plt.show()
+
 
 
         # # compute mean of log-likelihood over positive
