@@ -13,11 +13,13 @@ INPUT:
   CLEAN_DETECTIONS: False
   MAX_OCCLUSION: 0.5
   CROP:
-    ENABLED: True
+    # ENABLED: True
+    ENABLED: False
   MIN_SIZE_TRAIN: (550,)
-  USE_RANDOM_NOISE: True
-  # DINO_PATCH_SIZE: 14
+  USE_RANDOM_NOISE: False
+  DINO_PATCH_SIZE: 14
 MODEL:
+  PIXEL_STD: [57.375, 57.120, 58.395]
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
   META_ARCHITECTURE: "ProbDATwoStagePseudoLabGeneralizedRCNN"
   # META_ARCHITECTURE: "DAobjTwoStagePseudoLabGeneralizedRCNN"
@@ -85,10 +87,10 @@ DATASETS:
   CROSS_DATASET: True
   TRAIN_LABEL: ("cityscapes_fine_instance_seg_train",)
   TRAIN_UNLABEL: ("cityscapes_foggy_train",)
-  TEST: ("cityscapes_foggy_val",)
+  # TEST: ("cityscapes_foggy_val",)
   # TRAIN_UNLABEL: ("ACDC_train_fog",)
   # TEST: ("ACDC_val_fog",)
-  # TEST: ("cityscapes_val",)
+  TEST: ("cityscapes_val",)
 SEMISUPNET:
   Trainer: "ateacher"
   BBOX_THRESHOLD: 0.8
@@ -131,10 +133,10 @@ SEMISUPNET:
   SUPPRESS_BBOX_CORR: 1.0
   PSEUDO_THRESH_BOTH: False
   PSEUDO_OBJ_THRESH: 1.0
-  USE_DINO: False
+  USE_DINO: True
 TEST:
-  EVAL_PERIOD: 2500
-  # EVAL_PERIOD: 2
+  # EVAL_PERIOD: 2500
+  EVAL_PERIOD: 2
 
 
 

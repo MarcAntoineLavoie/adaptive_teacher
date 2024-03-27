@@ -71,6 +71,8 @@ import csv
 # from adapteacher.evaluation.grad_cam import GradCAM
 # import cv2
 
+from adapteacher.engine.dino_extractor import DinoV2VitFeatureExtractor
+
 # Supervised-only Trainer
 class BaselineTrainer(DefaultTrainer):
     def __init__(self, cfg):
@@ -430,6 +432,18 @@ class ATeacherTrainer(DefaultTrainer):
                     csv_writer = csv.writer(f_out, delimiter=' ')
                     csv_writer.writerow(columns)
 
+        if cfg.SEMISUPNET.USE_DINO:
+            self.use_dino = True
+            self.dino_model = DinoV2VitFeatureExtractor(cfg, model_name='dinov2_vitb14')
+            if comm.get_world_size() > 1:
+                self.dino_model = DistributedDataParallel(
+                    self.dino_model, device_ids=[comm.get_local_rank()], broadcast_buffers=False
+                )
+            else:
+                self.dino_model = self.dino_model.cuda()
+        else:
+            self.use_dino = False
+
         # self.target_layer_name = ['backbone.vgg2.8','backbone.vgg3.8','backbone.vgg4.8','proposal_generator.rpn_head.conv']
         # self.activations_grads = []
         # self._register_grad_hook()
@@ -712,7 +726,6 @@ class ATeacherTrainer(DefaultTrainer):
             
         # burn-in stage (supervised training with labeled data)
         if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP:
-
             # input both strong and weak supervised data into model
             label_data_q.extend(label_data_k)
             if self.align_gt_proposals:
@@ -726,6 +739,9 @@ class ATeacherTrainer(DefaultTrainer):
                 if not self.cfg.SEMISUPNET.ALIGN_INTRA:
                     loss_align['loss_align'] *= 1e-12
                 record_dict.update(loss_align)
+
+            if self.use_dino:
+                dino_out = self.dino_model(label_data_q)
 
             # weight losses
             loss_dict = {}
@@ -1796,73 +1812,73 @@ class SinkLoss(nn.Module):
        
         return loss
     
-# def temp_plots():
-#     import matplotlib.pyplot as plt
-#     from detectron2.utils.visualizer import Visualizer
-#     names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
-#     curr_id = 0
-#     curr_data = unlabel_data_k
-#     # curr_data = all_label_data
-#     img_ = curr_data[curr_id]['image'].transpose(0,1).transpose(1,2)
+def temp_plots():
+    import matplotlib.pyplot as plt
+    from detectron2.utils.visualizer import Visualizer
+    names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
+    curr_id = 1
+    curr_data = label_data_k
+    # curr_data = all_label_data
+    img_ = curr_data[curr_id]['image'].transpose(0,1).transpose(1,2)
 
-#     test_v = Visualizer(img_[:, :, [2,1,0]])
-#     temp = curr_data[curr_id]['instances'].gt_boxes
-#     labels = [names[x] for x in curr_data[curr_id]['instances'].gt_classes.tolist()]
-#     # temp = proposals_roih_unsup_k[curr_id].pred_boxes
-#     temp.tensor = temp.tensor.cpu()
-#     test_v.overlay_instances(boxes=temp, labels=labels)
-#     img = test_v.get_output().get_image()
+    test_v = Visualizer(img_[:, :, [2,1,0]])
+    temp = curr_data[curr_id]['instances'].gt_boxes
+    labels = [names[x] for x in curr_data[curr_id]['instances'].gt_classes.tolist()]
+    # temp = proposals_roih_unsup_k[curr_id].pred_boxes
+    temp.tensor = temp.tensor.cpu()
+    test_v.overlay_instances(boxes=temp, labels=labels)
+    img = test_v.get_output().get_image()
 
-#     test_v2 = Visualizer(img_[:, :, [2,1,0]])
-#     temp2 = curr_data[curr_id]['instances_gt'].gt_boxes
-#     labels2 = [names[x] for x in curr_data[curr_id]['instances_gt'].gt_classes.tolist()]
-#     # test_v2 = Visualizer(label_data_k[curr_id]['image'].transpose(0,1).transpose(1,2)[:, :, [2,1,0]])
-#     # temp2 = label_data_k[curr_id]['instances'].gt_boxes
-#     temp2.tensor = temp2.tensor.cpu()
-#     test_v2.overlay_instances(boxes=temp2, labels=labels2)
-#     img2 = test_v2.get_output().get_image()
+    test_v2 = Visualizer(img_[:, :, [2,1,0]])
+    temp2 = curr_data[curr_id]['instances_gt'].gt_boxes
+    labels2 = [names[x] for x in curr_data[curr_id]['instances_gt'].gt_classes.tolist()]
+    # test_v2 = Visualizer(label_data_k[curr_id]['image'].transpose(0,1).transpose(1,2)[:, :, [2,1,0]])
+    # temp2 = label_data_k[curr_id]['instances'].gt_boxes
+    temp2.tensor = temp2.tensor.cpu()
+    test_v2.overlay_instances(boxes=temp2, labels=labels2)
+    img2 = test_v2.get_output().get_image()
 
-#     # test_v3= Visualizer(img_[:, :, [2,1,0]])
-#     # temp3 = old_pseudo_boxes[curr_id]
-#     # temp3.tensor = temp3.tensor.cpu()
-#     # test_v3.overlay_instances(boxes=temp3)
-#     # img3 = test_v3.get_output().get_image()
+    # test_v3= Visualizer(img_[:, :, [2,1,0]])
+    # temp3 = old_pseudo_boxes[curr_id]
+    # temp3.tensor = temp3.tensor.cpu()
+    # test_v3.overlay_instances(boxes=temp3)
+    # img3 = test_v3.get_output().get_image()
 
-#     test_v3 = Visualizer(img_[:, :, [2,1,0]])
-#     ids3 = torch.where(torch.logical_and(proposals_roih_unsup_k[curr_id].rpn_score > -5.0, proposals_roih_unsup_k[curr_id].scores > 0.5))[0]
-#     temp3 = proposals_roih_unsup_k[curr_id][ids3].pred_boxes
-#     labels3 = [names[x] for x in proposals_roih_unsup_k[curr_id][ids3].pred_classes.tolist()]
-#     temp3.tensor = temp3.tensor.cpu()
-#     # ids = torch.where(self.model.proposals_roih_temp[curr_id].gt_classes<8)[0]
-#     # temp3 = self.model.proposals_roih_temp[curr_id].proposal_boxes[ids]
-#     # logits_temp = self.model.proposals_roih_temp[curr_id].class_logits[ids]
-#     # logits3 = torch.gather(logits_temp, 1, self.model.proposals_roih_temp[curr_id].gt_classes[ids].unsqueeze(1))
-#     # new_ids = torch.where(logits3>0.8)[0]
-#     # temp3.tensor = temp3.tensor.cpu()[new_ids,:]
-#     # labels3 = self.model.proposals_roih_temp[curr_id].gt_classes[ids][new_ids].tolist()
-#     test_v3.overlay_instances(boxes=temp3, labels=labels3)
-#     # boxes = Boxes(torch.cat((temp3[sel_id].tensor, self.model.proposals_roih_temp[curr_id].gt_boxes[sel_id].tensor.detach().cpu())))
-#     # test_v3.overlay_instances(boxes=boxes, labels=[labels3[sel_id], self.model.proposals_roih_temp[curr_id].gt_classes[sel_id].detach().cpu().item()])
-#     img3 = test_v3.get_output().get_image()
+    test_v3 = Visualizer(img_[:, :, [2,1,0]])
+    ids3 = torch.where(torch.logical_and(proposals_roih_unsup_k[curr_id].rpn_score > -5.0, proposals_roih_unsup_k[curr_id].scores > 0.5))[0]
+    temp3 = proposals_roih_unsup_k[curr_id][ids3].pred_boxes
+    labels3 = [names[x] for x in proposals_roih_unsup_k[curr_id][ids3].pred_classes.tolist()]
+    temp3.tensor = temp3.tensor.cpu()
+    # ids = torch.where(self.model.proposals_roih_temp[curr_id].gt_classes<8)[0]
+    # temp3 = self.model.proposals_roih_temp[curr_id].proposal_boxes[ids]
+    # logits_temp = self.model.proposals_roih_temp[curr_id].class_logits[ids]
+    # logits3 = torch.gather(logits_temp, 1, self.model.proposals_roih_temp[curr_id].gt_classes[ids].unsqueeze(1))
+    # new_ids = torch.where(logits3>0.8)[0]
+    # temp3.tensor = temp3.tensor.cpu()[new_ids,:]
+    # labels3 = self.model.proposals_roih_temp[curr_id].gt_classes[ids][new_ids].tolist()
+    test_v3.overlay_instances(boxes=temp3, labels=labels3)
+    # boxes = Boxes(torch.cat((temp3[sel_id].tensor, self.model.proposals_roih_temp[curr_id].gt_boxes[sel_id].tensor.detach().cpu())))
+    # test_v3.overlay_instances(boxes=boxes, labels=[labels3[sel_id], self.model.proposals_roih_temp[curr_id].gt_classes[sel_id].detach().cpu().item()])
+    img3 = test_v3.get_output().get_image()
 
-#     n = 100
-#     labels4 = list(range(n))
-#     # n = 100
-#     # labels4 = [n]
-#     test_v4 = Visualizer(img_[:, :, [2,1,0]])
-#     # temp4 = pesudo_proposals_rpn_unsup_k[curr_id].gt_boxes
-#     temp4 = proposals_rpn_unsup_k[curr_id].proposal_boxes
-#     # temp4 = self.model.proposals_rpn_temp[curr_id].proposal_boxes
-#     temp4.tensor = temp4.tensor.cpu()
-#     test_v4.overlay_instances(boxes=temp4[:n], labels=labels4)
-#     # test_v4.overlay_instances(boxes=temp4[n], labels=labels4)
-#     img4 = test_v4.get_output().get_image()
+    n = 100
+    labels4 = list(range(n))
+    # n = 100
+    # labels4 = [n]
+    test_v4 = Visualizer(img_[:, :, [2,1,0]])
+    # temp4 = pesudo_proposals_rpn_unsup_k[curr_id].gt_boxes
+    temp4 = proposals_rpn_unsup_k[curr_id].proposal_boxes
+    # temp4 = self.model.proposals_rpn_temp[curr_id].proposal_boxes
+    temp4.tensor = temp4.tensor.cpu()
+    test_v4.overlay_instances(boxes=temp4[:n], labels=labels4)
+    # test_v4.overlay_instances(boxes=temp4[n], labels=labels4)
+    img4 = test_v4.get_output().get_image()
 
-#     plt.figure();plt.imshow(img)
-#     plt.figure();plt.imshow(img2)
-#     plt.figure();plt.imshow(img3)
-#     plt.figure();plt.imshow(img4)
-#     plt.show()
+    plt.figure();plt.imshow(img)
+    plt.figure();plt.imshow(img2)
+    plt.figure();plt.imshow(img3)
+    plt.figure();plt.imshow(img4)
+    plt.show()
 
 # def temp_cam():
 #     self.gradient = []
