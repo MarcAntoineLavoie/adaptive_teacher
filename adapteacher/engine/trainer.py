@@ -363,7 +363,7 @@ class ATeacherTrainer(DefaultTrainer):
         
         # self.register_hooks(self.build_hooks_final())
         self.register_hooks(self.build_hooks())
-        self.register_hooks(self.build_hooks_final())
+        # self.register_hooks(self.build_hooks_final())
 
         self.prob_iou = cfg.MODEL.PROBABILISTIC_MODELING.PROB_IOU
         self.select_iou = cfg.MODEL.PROBABILISTIC_MODELING.SELECT_IOU

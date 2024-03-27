@@ -16,6 +16,7 @@ INPUT:
     ENABLED: True
   MIN_SIZE_TRAIN: (550,)
   USE_RANDOM_NOISE: True
+  # DINO_PATCH_SIZE: 14
 MODEL:
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
   META_ARCHITECTURE: "ProbDATwoStagePseudoLabGeneralizedRCNN"
@@ -87,6 +88,7 @@ DATASETS:
   TEST: ("cityscapes_foggy_val",)
   # TRAIN_UNLABEL: ("ACDC_train_fog",)
   # TEST: ("ACDC_val_fog",)
+  # TEST: ("cityscapes_val",)
 SEMISUPNET:
   Trainer: "ateacher"
   BBOX_THRESHOLD: 0.8
@@ -127,6 +129,9 @@ SEMISUPNET:
   BOX_NORM_CLASS: False
   EVAL_PSEUDO_LABELS: False
   SUPPRESS_BBOX_CORR: 1.0
+  PSEUDO_THRESH_BOTH: False
+  PSEUDO_OBJ_THRESH: 1.0
+  USE_DINO: False
 TEST:
   EVAL_PERIOD: 2500
   # EVAL_PERIOD: 2

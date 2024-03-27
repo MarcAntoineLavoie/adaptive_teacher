@@ -163,7 +163,7 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
             )
             n = len(proposals[0])
             for i in range(len(proposals)):
-                proposals[i].class_logits = torch.nn.functional.softmax(temp[0][i*n:(i+1)*n], dim=1)
+                proposals[i].class_logits = torch.nn.functional.softmax(temp[0][i*n:(i+1)*n,:], dim=1)
             return proposals, losses
         else:
             pred_instances, predictions = self._forward_box(
