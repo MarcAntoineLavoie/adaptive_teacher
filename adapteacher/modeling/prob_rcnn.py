@@ -158,12 +158,12 @@ class ProbROIHeadsPseudoLab(StandardROIHeads):
         del targets
 
         if (self.training and compute_loss) or compute_val_loss:
-            losses, _ = self._forward_box(
+            losses, temp = self._forward_box(
                 features, proposals, compute_loss, compute_val_loss, branch, unsup=unsup, current_step=current_step, proposals_gt=proposals_gt,
             )
             n = len(proposals[0])
             for i in range(len(proposals)):
-                proposals[i].class_logits = torch.nn.functional.softmax(_[0][i*n:(i+1)*n], dim=1)
+                proposals[i].class_logits = torch.nn.functional.softmax(temp[0][i*n:(i+1)*n], dim=1)
             return proposals, losses
         else:
             pred_instances, predictions = self._forward_box(
