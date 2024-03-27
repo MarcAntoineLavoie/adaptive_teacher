@@ -847,9 +847,9 @@ class ATeacherTrainer(DefaultTrainer):
             if self.cfg.INPUT.CLEAN_DETECTIONS:
                 unlabel_data_q, old_pseudo_boxes = self.clean_detections(unlabel_data_q, unlabel_regions, output_old=True)
 
-            if any(any(i in x['instances_gt'].gt_classes.tolist() for i in [1,7]) for x in unlabel_data_q):
-            # if any(any(i in x['instances_gt'].gt_classes.tolist() for i in [3,4,5]) for x in unlabel_data_q):
-                a = 1
+            # if any(any(i in x['instances_gt'].gt_classes.tolist() for i in [1,7]) for x in unlabel_data_q):
+            # # if any(any(i in x['instances_gt'].gt_classes.tolist() for i in [3,4,5]) for x in unlabel_data_q):
+            #     a = 1
 
             all_label_data = label_data_q + label_data_k
             all_unlabel_data = unlabel_data_q
