@@ -39,7 +39,6 @@ class DatasetMapperTwoCropSeparate(DatasetMapper):
 
     def __init__(self, cfg, is_train=True):
         self.augmentation = utils.build_augmentation(cfg, is_train)
-        self.augmentations = new_augs(cfg, is_train)
         # include crop into self.augmentation
         if cfg.INPUT.CROP.ENABLED and is_train:
             self.augmentation.insert(
