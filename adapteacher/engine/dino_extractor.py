@@ -26,7 +26,7 @@ class DinoV2VitFeatureExtractor(nn.Module):
     """
     DINO V2 Vision Transformer Feature Extractor.
     """
-    def __init__(self, cfg, model_name='dinov2_vitb14'):
+    def __init__(self, cfg, cnn_dim, model_name='dinov2_vitb14'):
         super(DinoV2VitFeatureExtractor, self).__init__()
         self.preprocessing = dino_preprocessing(cfg.MODEL.PIXEL_MEAN, cfg.MODEL.PIXEL_STD, is_RGB=False)
         self.is_RGB = False
@@ -64,6 +64,8 @@ class DinoV2VitFeatureExtractor(nn.Module):
         assert self.encoder.embed_dim == embed_dim
         self.embed_dim = self.encoder.embed_dim
         self.patch_size = patch_size
+        self.cnn_dim = cnn_dim
+        self.projection_layer = nn.Conv2d(cnn_dim, self.embed_dim, 1,1)
 
     def forward(self, x):
         x = torch.stack([img['image'] for img in x], dim=0)[:,[2,1,0],:,:].float()
@@ -83,3 +85,17 @@ class DinoV2VitFeatureExtractor(nn.Module):
         x_grid_features = x.contiguous().transpose(1, 2).contiguous().view(batch_size, self.embed_dim, f_height, f_width)
 
         return x_grid_features
+    
+    def project_RCNN_feat(self, feat_cnn, feat_dino):
+        h, w = feat_dino.shape[2:]
+        feat_cnn = self.projection_layer(feat_cnn)
+        feat_cnn = F.interpolate(feat_cnn, (h,w), mode='bilinear')
+        if self.normalize_feature:
+            feat_cnn = F.normalize(feat_cnn, p=2, dim=1)
+        return feat_cnn
+    
+    def dino_loss(self, feat_cnn, feat_dino):
+        feat_cnn = self.project_RCNN_feat(feat_cnn, feat_dino).permute((0,2,3,1)).unsqueeze(-2)
+        feat_dino = feat_dino.permute((0,2,3,1)).unsqueeze(-1)
+        sim = 1 - torch.matmul(feat_cnn, feat_dino)
+        return sim.mean()

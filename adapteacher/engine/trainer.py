@@ -322,6 +322,21 @@ class ATeacherTrainer(DefaultTrainer):
 
         # create an student model
         model = self.build_model(cfg)
+
+        if cfg.SEMISUPNET.USE_DINO:
+            self.use_dino = True
+            cnn_dim = [*model.backbone.modules()][-3].num_features
+            model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14')
+            self._register_input_hook(model, 'proposal_generator')
+            if comm.get_world_size() > 1:
+                model.dino_head = DistributedDataParallel(
+                    model.dino_head, device_ids=[comm.get_local_rank()], broadcast_buffers=False
+                )
+            else:
+                model.dino_head = model.dino_head.to((torch.device(cfg.MODEL.DEVICE)))
+        else:
+            self.use_dino = False
+
         optimizer = self.build_optimizer(cfg, model)
 
         # create an teacher model
@@ -432,17 +447,7 @@ class ATeacherTrainer(DefaultTrainer):
                     csv_writer = csv.writer(f_out, delimiter=' ')
                     csv_writer.writerow(columns)
 
-        if cfg.SEMISUPNET.USE_DINO:
-            self.use_dino = True
-            self.dino_model = DinoV2VitFeatureExtractor(cfg, model_name='dinov2_vitb14')
-            if comm.get_world_size() > 1:
-                self.dino_model = DistributedDataParallel(
-                    self.dino_model, device_ids=[comm.get_local_rank()], broadcast_buffers=False
-                )
-            else:
-                self.dino_model = self.dino_model.cuda()
-        else:
-            self.use_dino = False
+
 
         # self.target_layer_name = ['backbone.vgg2.8','backbone.vgg3.8','backbone.vgg4.8','proposal_generator.rpn_head.conv']
         # self.activations_grads = []
@@ -467,6 +472,15 @@ class ATeacherTrainer(DefaultTrainer):
                 self.activations_grads.append(module.register_backward_hook(self._get_grads_hook))
         return True
         print(f"Layer {self.target_layer_name} not found in Model!")
+    
+    def _get_rcnn_input_hook(self, module, input, output):
+        self.cnn_feat = input[1][self.cfg.MODEL.RPN.IN_FEATURES[0]]
+
+    def _register_input_hook(self, model, target_layer):
+        for (name, module) in model.named_modules():
+            if name == target_layer:
+                module.register_forward_hook(self._get_rcnn_input_hook)
+        return True
 
     def _postprocess_cam(self, raw_cam, img_width, img_height):
         cam_orig = np.sum(raw_cam, axis=0)  # [H,W]
@@ -741,7 +755,9 @@ class ATeacherTrainer(DefaultTrainer):
                 record_dict.update(loss_align)
 
             if self.use_dino:
-                dino_out = self.dino_model(label_data_q)
+                dino_feat = self.model.dino_head(label_data_q)
+                dino_loss = self.model.dino_head.dino_loss(self.cnn_feat, dino_feat)
+                record_dict['loss_dino'] = dino_loss
 
             # weight losses
             loss_dict = {}
