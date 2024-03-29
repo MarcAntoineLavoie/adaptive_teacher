@@ -71,7 +71,7 @@ import csv
 # from adapteacher.evaluation.grad_cam import GradCAM
 # import cv2
 
-from adapteacher.engine.dino_extractor import DinoV2VitFeatureExtractor
+from adapteacher.engine.dino_extractor import DinoV2VitFeatureExtractor, DinoAlignHead
 
 # Supervised-only Trainer
 class BaselineTrainer(DefaultTrainer):
@@ -326,14 +326,20 @@ class ATeacherTrainer(DefaultTrainer):
         if cfg.SEMISUPNET.USE_DINO:
             self.use_dino = True
             cnn_dim = [*model.backbone.modules()][-3].num_features
-            model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14')
+            model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14').eval()
+            dino_dim = [*model.dino_head.modules()][-2].normalized_shape[0]
+            model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature)
             self._register_input_hook(model, 'proposal_generator')
             if comm.get_world_size() > 1:
                 model.dino_head = DistributedDataParallel(
                     model.dino_head, device_ids=[comm.get_local_rank()], broadcast_buffers=False
                 )
+                model.dino_align = DistributedDataParallel(
+                    model.dino_align, device_ids=[comm.get_local_rank()], broadcast_buffers=False
+                )
             else:
                 model.dino_head = model.dino_head.to((torch.device(cfg.MODEL.DEVICE)))
+                model.dino_align = model.dino_align.to((torch.device(cfg.MODEL.DEVICE)))
         else:
             self.use_dino = False
 
@@ -756,7 +762,8 @@ class ATeacherTrainer(DefaultTrainer):
 
             if self.use_dino:
                 dino_feat = self.model.dino_head(label_data_q)
-                dino_loss = self.model.dino_head.dino_loss(self.cnn_feat, dino_feat)
+                cnn_feat = self.model.dino_align(self.cnn_feat, dino_feat)
+                dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat)
                 record_dict['loss_dino'] = dino_loss
 
             # weight losses

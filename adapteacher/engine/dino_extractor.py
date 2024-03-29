@@ -64,8 +64,7 @@ class DinoV2VitFeatureExtractor(nn.Module):
         assert self.encoder.embed_dim == embed_dim
         self.embed_dim = self.encoder.embed_dim
         self.patch_size = patch_size
-        self.cnn_dim = cnn_dim
-        self.projection_layer = nn.Conv2d(cnn_dim, self.embed_dim, 1,1)
+
 
     def forward(self, x):
         x = torch.stack([img['image'] for img in x], dim=0)[:,[2,1,0],:,:].float()
@@ -85,6 +84,15 @@ class DinoV2VitFeatureExtractor(nn.Module):
         x_grid_features = x.contiguous().transpose(1, 2).contiguous().view(batch_size, self.embed_dim, f_height, f_width)
 
         return x_grid_features
+
+class DinoAlignHead(nn.Module):
+    def __init__(self, cnn_dim, dino_dim, normalize_feature=True):
+        super(DinoAlignHead, self).__init__()
+        self.normalize_feature = normalize_feature
+        self.projection_layer = nn.Conv2d(cnn_dim, dino_dim, 1, 1)
+
+    def forward(self, feat_cnn, feat_dino):
+        return self.project_RCNN_feat(feat_cnn, feat_dino)
     
     def project_RCNN_feat(self, feat_cnn, feat_dino):
         h, w = feat_dino.shape[2:]
@@ -95,7 +103,7 @@ class DinoV2VitFeatureExtractor(nn.Module):
         return feat_cnn
     
     def dino_loss(self, feat_cnn, feat_dino):
-        feat_cnn = self.project_RCNN_feat(feat_cnn, feat_dino).permute((0,2,3,1)).unsqueeze(-2)
+        feat_cnn = feat_cnn.permute((0,2,3,1)).unsqueeze(-2)
         feat_dino = feat_dino.permute((0,2,3,1)).unsqueeze(-1)
         sim = 1 - torch.matmul(feat_cnn, feat_dino)
         return sim.mean()
