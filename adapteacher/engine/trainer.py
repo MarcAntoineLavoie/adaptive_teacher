@@ -330,6 +330,7 @@ class ATeacherTrainer(DefaultTrainer):
             dino_dim = [*model.dino_head.modules()][-2].normalized_shape[0]
             model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature)
             self._register_input_hook(model, 'proposal_generator')
+            self.dino_loss_weight = cfg.SEMISUPNET.DINO_LOSS_WEIGHT
             if comm.get_world_size() > 1:
                 model.dino_head = DistributedDataParallel(
                     model.dino_head, device_ids=[comm.get_local_rank()], broadcast_buffers=False
@@ -763,7 +764,7 @@ class ATeacherTrainer(DefaultTrainer):
             if self.use_dino:
                 dino_feat = self.model.dino_head(label_data_q)
                 cnn_feat = self.model.dino_align(self.cnn_feat, dino_feat)
-                dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat)
+                dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight
                 record_dict['loss_dino'] = dino_loss
 
             # weight losses

@@ -68,6 +68,7 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.PSEUDO_THRESH_BOTH = False
     _C.SEMISUPNET.PSEUDO_OBJ_THRESH = 1.0
     _C.SEMISUPNET.USE_DINO = False
+    _C.SEMISUPNET.DINO_LOSS_WEIGHT = 1.0
 
     # dataloader
     # supervision level
