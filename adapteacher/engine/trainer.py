@@ -331,15 +331,12 @@ class ATeacherTrainer(DefaultTrainer):
             model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature)
             self._register_input_hook(model, 'proposal_generator')
             self.dino_loss_weight = cfg.SEMISUPNET.DINO_LOSS_WEIGHT
+            model.dino_head = model.dino_head.to((torch.device(cfg.MODEL.DEVICE)))
             if comm.get_world_size() > 1:
-                model.dino_head = DistributedDataParallel(
-                    model.dino_head, device_ids=[comm.get_local_rank()], broadcast_buffers=False
-                )
                 model.dino_align = DistributedDataParallel(
                     model.dino_align, device_ids=[comm.get_local_rank()], broadcast_buffers=False
                 )
             else:
-                model.dino_head = model.dino_head.to((torch.device(cfg.MODEL.DEVICE)))
                 model.dino_align = model.dino_align.to((torch.device(cfg.MODEL.DEVICE)))
         else:
             self.use_dino = False
