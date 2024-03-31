@@ -347,6 +347,8 @@ class ATeacherTrainer(DefaultTrainer):
             model = DistributedDataParallel(
                 model, device_ids=[comm.get_local_rank()], broadcast_buffers=False
             )
+            model.dino_head = model.module.dino_head
+            model.dino_align = model.module.dino_align
 
         TrainerBase.__init__(self)
         self._trainer = (AMPTrainer if cfg.SOLVER.AMP.ENABLED else SimpleTrainer)(
