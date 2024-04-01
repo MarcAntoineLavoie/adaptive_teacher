@@ -90,7 +90,8 @@ def main(args):
             DetectionCheckpointer(
                 ensem_ts_model, save_dir=cfg.OUTPUT_DIR
             ).resume_or_load(cfg.MODEL.WEIGHTS, resume=args.resume)
-            res = Trainer.test(cfg, ensem_ts_model.modelTeacher)
+            # res = Trainer.test(cfg, ensem_ts_model.modelTeacher)
+            res = Trainer.test(cfg, ensem_ts_model.modelStudent)
 
         else:
             model = Trainer.build_model(cfg)
@@ -115,12 +116,12 @@ if __name__ == "__main__":
     #   OUTPUT_DIR output/exp_city
 
     # args.num_gpus = 1
-    # args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
+    args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_test.yaml'
     # args.config_file = './configs/faster_rcnn_R101_cross_clipart_v2.yaml'
-    # args.resume = False
-    args.resume = True
+    args.resume = False
+    # args.resume = True
 
     # args.OUTPUT_DIR = './output/temp1'
 
@@ -136,6 +137,7 @@ if __name__ == "__main__":
     # args.output_dir = 'output/test_v2_align_contrast010_temp100/'
     # args.output_dir = 'output/test_v2_align_contrast010_gtprops/'
     # args.output_dir = 'output/test_v2_short_align010_centre_gtprops_mmd/'
+    # args.output_dir = 'output/test_dino200_cityonly/'
 
     # args.use_old_cfg = True
     args.use_old_cfg = False

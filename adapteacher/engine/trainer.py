@@ -325,12 +325,14 @@ class ATeacherTrainer(DefaultTrainer):
 
         if cfg.SEMISUPNET.USE_DINO:
             self.use_dino = True
+            self.cnn_feat = {}
             cnn_dim = [*model.backbone.modules()][-3].num_features
             model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14').eval()
             dino_dim = [*model.dino_head.modules()][-2].normalized_shape[0]
             model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature)
             self._register_input_hook(model, 'proposal_generator')
             self.dino_loss_weight = cfg.SEMISUPNET.DINO_LOSS_WEIGHT
+            self.dino_loss_weight_target = cfg.SEMISUPNET.DINO_LOSS_WEIGHT_TARGET
             model.dino_head = model.dino_head.to((torch.device(cfg.MODEL.DEVICE)))
             model.dino_align = model.dino_align.to((torch.device(cfg.MODEL.DEVICE)))
         else:
@@ -475,7 +477,7 @@ class ATeacherTrainer(DefaultTrainer):
         print(f"Layer {self.target_layer_name} not found in Model!")
     
     def _get_rcnn_input_hook(self, module, input, output):
-        self.cnn_feat = input[1][self.cfg.MODEL.RPN.IN_FEATURES[0]]
+        self.cnn_feat[self.branch] = input[1][self.cfg.MODEL.RPN.IN_FEATURES[0]]
 
     def _register_input_hook(self, model, target_layer):
         for (name, module) in model.named_modules():
@@ -745,6 +747,8 @@ class ATeacherTrainer(DefaultTrainer):
             label_data_q.extend(label_data_k)
             if self.align_gt_proposals:
                 label_data_q = self.hold_label(label_data_q)
+
+            self.branch = "supervised"
             record_dict, _, _, _ = self.model(
                 label_data_q, branch="supervised")
 
@@ -757,7 +761,7 @@ class ATeacherTrainer(DefaultTrainer):
 
             if self.use_dino:
                 dino_feat = self.model.dino_head(label_data_q)
-                cnn_feat = self.model.dino_align(self.cnn_feat, dino_feat)
+                cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
                 dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight
                 record_dict['loss_dino'] = dino_loss
 
@@ -889,6 +893,7 @@ class ATeacherTrainer(DefaultTrainer):
             all_unlabel_data = unlabel_data_q
 
             # 4. input both strongly and weakly augmented labeled data into student model
+            self.branch = "supervised"
             if 1:
                 record_all_label_data, _, _, _ = self.model(
                     all_label_data, branch="supervised", use_gt_only=False
@@ -901,10 +906,23 @@ class ATeacherTrainer(DefaultTrainer):
                     )
                     record_dict.update(record_all_label_data)
 
+            if self.use_dino:
+                dino_feat = self.model.dino_head(all_label_data)
+                cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
+                dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight
+                record_dict['loss_dino'] = dino_loss
+
             # 5. input strongly augmented unlabeled data into model
+            self.branch = "supervised_target"
             record_all_unlabel_data, _, _, _ = self.model(
                 all_unlabel_data, branch="supervised_target", use_gt_only=self.use_gt_proposals_only
             )
+            if self.use_dino:
+                dino_feat = self.model.dino_head(all_unlabel_data)
+                cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
+                dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight_target
+                record_dict['loss_dino_pseud'] = dino_loss_pseudo
+
             new_record_all_unlabel_data = {}
             for key in record_all_unlabel_data.keys():
                 new_record_all_unlabel_data[key + "_pseudo"] = record_all_unlabel_data[
