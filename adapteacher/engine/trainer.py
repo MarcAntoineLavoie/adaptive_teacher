@@ -742,6 +742,11 @@ class ATeacherTrainer(DefaultTrainer):
             self.model_teacher.roi_heads.keep_stats = False
             
         # burn-in stage (supervised training with labeled data)
+
+        if self.iter % self.cfg.SEMISUPNET.TEACHER_UPDATE_ITER == 0:
+            self._update_teacher_model(
+                keep_rate=self.cfg.SEMISUPNET.EMA_KEEP_RATE)
+
         if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP:
             # input both strong and weak supervised data into model
             label_data_q.extend(label_data_k)
@@ -773,16 +778,16 @@ class ATeacherTrainer(DefaultTrainer):
             losses = sum(loss_dict.values())
 
         else:
-            if self.iter == self.cfg.SEMISUPNET.BURN_UP_STEP:
-                # update copy the the whole model
-                self._update_teacher_model(keep_rate=0.00)
-                # self.model.build_discriminator()
+            # if self.iter == self.cfg.SEMISUPNET.BURN_UP_STEP:
+            #     # update copy the the whole model
+            #     self._update_teacher_model(keep_rate=0.00)
+            #     # self.model.build_discriminator()
 
-            elif (
-                self.iter - self.cfg.SEMISUPNET.BURN_UP_STEP
-            ) % self.cfg.SEMISUPNET.TEACHER_UPDATE_ITER == 0:
-                self._update_teacher_model(
-                    keep_rate=self.cfg.SEMISUPNET.EMA_KEEP_RATE)
+            # elif (
+            #     self.iter - self.cfg.SEMISUPNET.BURN_UP_STEP
+            # ) % self.cfg.SEMISUPNET.TEACHER_UPDATE_ITER == 0:
+            #     self._update_teacher_model(
+            #         keep_rate=self.cfg.SEMISUPNET.EMA_KEEP_RATE)
 
             record_dict = {}
 
