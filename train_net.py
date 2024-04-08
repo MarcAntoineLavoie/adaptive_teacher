@@ -116,12 +116,12 @@ if __name__ == "__main__":
     #   OUTPUT_DIR output/exp_city
 
     # args.num_gpus = 1
-    args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
+    # args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_test.yaml'
     # args.config_file = './configs/faster_rcnn_R101_cross_clipart_v2.yaml'
-    args.resume = False
-    # args.resume = True
+    # args.resume = False
+    args.resume = True
 
     # args.OUTPUT_DIR = './output/temp1'
 
@@ -139,8 +139,8 @@ if __name__ == "__main__":
     # args.output_dir = 'output/test_v2_short_align010_centre_gtprops_mmd/'
     # args.output_dir = 'output/test_dino000_cityonly/'
 
-    # args.use_old_cfg = True
-    args.use_old_cfg = False
+    args.use_old_cfg = True
+    # args.use_old_cfg = False
 
     print("Command Line Args:", args)
     launch(
