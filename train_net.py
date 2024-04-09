@@ -20,6 +20,7 @@ from adapteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
 
 from math import floor 
 import os
+from random import randint
 
 def setup(args):
     """
@@ -110,7 +111,9 @@ def main(args):
 
 if __name__ == "__main__":
     args = default_argument_parser().parse_args()
-
+    url_parts = args.dist_url.rsplit(':',1)
+    url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
+    args.dist_url = (':').join(url_parts)
     #   --num-gpus 8\
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\
     #   OUTPUT_DIR output/exp_city
