@@ -29,7 +29,7 @@ def setup(args):
     cfg = get_cfg()
     cfg.set_new_allowed(True)
     add_ateacher_config(cfg)
-    if args.use_old_cfg and os.path.isfile('/'.join([os.getcwd(),args.output_dir,'config.yaml'])):
+    if args.use_old_cfg: #os.path.isfile('/'.join([os.getcwd(),args.output_dir,'config.yaml'])):
         cfg.merge_from_file('/'.join([args.output_dir,'config.yaml']))
         cfg.OUTPUT_DIR = args.output_dir
         cfg.SOLVER.IMG_PER_BATCH_LABEL = 2
@@ -142,8 +142,8 @@ if __name__ == "__main__":
     # args.output_dir = 'output/test_v2_short_align010_centre_gtprops_mmd/'
     # args.output_dir = 'output/test_dino000_cityonly/'
 
-    args.use_old_cfg = True
-    # args.use_old_cfg = False
+    # args.use_old_cfg = True
+    args.use_old_cfg = False
 
     print("Command Line Args:", args)
     launch(
