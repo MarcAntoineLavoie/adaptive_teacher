@@ -183,7 +183,7 @@ class DatasetMapperTwoCropSeparate_detect(DatasetMapper):
     3. Prepare data and annotations to Tensor and :class:`Instances`
     """
 
-    def __init__(self, cfg, is_train=True):
+    def __init__(self, cfg, is_train=True, keep_tf_data=False):
         if cfg.SEMISUPNET.USE_DINO:
             self.augmentation = new_augs(cfg, is_train)
         else:
@@ -223,6 +223,7 @@ class DatasetMapperTwoCropSeparate_detect(DatasetMapper):
                 else cfg.DATASETS.PRECOMPUTED_PROPOSAL_TOPK_TEST
             )
         self.is_train = is_train
+        self.keep_tf_data = keep_tf_data
 
     def __call__(self, dataset_dict):
         """
@@ -267,8 +268,8 @@ class DatasetMapperTwoCropSeparate_detect(DatasetMapper):
 
         if "annotations" in dataset_dict:
             for anno in dataset_dict["annotations"]:
-                if not self.mask_on:
-                    anno.pop("segmentation", None)
+                # if not self.mask_on:
+                #     anno.pop("segmentation", None)
                 if not self.keypoint_on:
                     anno.pop("keypoints", None)
 
@@ -282,6 +283,11 @@ class DatasetMapperTwoCropSeparate_detect(DatasetMapper):
                 for obj in dataset_dict.pop("annotations")
                 if obj.get("iscrowd", 0) == 0
             ]
+            if len(annos):
+                if 'segmentation' in annos[0].keys():
+                    for lv1 in range(len(annos)):
+                        # annos[lv1]['segmentation'] = [annos[lv1]['segmentation'][0].reshape(-1,2)]
+                        annos[lv1]['segmentation'] = [x.tolist() for x in annos[lv1]['segmentation']]
             instances = utils.annotations_to_instances(
                 annos, image_shape, mask_format=self.mask_format
             )
@@ -291,6 +297,9 @@ class DatasetMapperTwoCropSeparate_detect(DatasetMapper):
 
             bboxes_d2_format = utils.filter_empty_instances(instances)
             dataset_dict["instances"] = bboxes_d2_format
+
+        if self.keep_tf_data:
+            dataset_dict['tf_data'] = transforms
 
         # apply strong augmentation
         # We use torchvision augmentation, which is not compatiable with

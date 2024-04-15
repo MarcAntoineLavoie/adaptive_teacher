@@ -72,6 +72,8 @@ import csv
 # import cv2
 
 from adapteacher.engine.dino_extractor import DinoV2VitFeatureExtractor, DinoAlignHead
+from detectron2.structures.masks import polygons_to_bitmask
+from PIL import Image
 
 # Supervised-only Trainer
 class BaselineTrainer(DefaultTrainer):
@@ -550,7 +552,7 @@ class ATeacherTrainer(DefaultTrainer):
     @classmethod
     def build_train_loader(cls, cfg):
         # mapper = DatasetMapperTwoCropSeparate(cfg, True)
-        mapper = DatasetMapperTwoCropSeparate_detect(cfg, True)
+        mapper = DatasetMapperTwoCropSeparate_detect(cfg, True, keep_tf_data=True)
         return build_detection_semisup_train_loader_two_crops(cfg, mapper)
 
     @classmethod
@@ -1228,7 +1230,8 @@ class ATeacherTrainer(DefaultTrainer):
         ]
 
         def eval_relative():
-            return self.test_relative()
+            # return self.test_relative()
+            return self.test_DINO()
 
         ret.append(hooks.EvalHook(0,
                    eval_relative))
@@ -1238,6 +1241,74 @@ class ATeacherTrainer(DefaultTrainer):
             ret.append(hooks.PeriodicWriter(self.build_writers(), period=20))
         return ret
     
+    def test_DINO(self):
+        self.model = self.model.eval()
+        self.branch = "supervised"
+        thresh = 0.15
+        with torch.no_grad():
+            source_sims = []
+            target_sims = []
+            source_masks = []
+            target_masks = []
+            for x in range(50):
+                if not x % 10:
+                    print(x)
+                data = next(self._trainer._data_loader_iter)
+                source_strong, source_weak, target_strong, target_weak = data
+
+                _, _ = self.model(source_weak, branch="supervised")
+                dino_feat = self.model.dino_head(source_weak)
+                cnn_feat = self.model.dino_align(self.cnn_feat["supervised"], dino_feat)
+                loss_s, sim_s = self.model.dino_align.dino_loss(cnn_feat, dino_feat, return_sim=True)
+                source_sims.append(sim_s.squeeze().detach().cpu().numpy())
+                source_masks.append(self.get_fg_mask(source_weak))
+
+                _, _ = self.model(target_weak, branch="supervised")
+                dino_feat = self.model.dino_head(target_weak)
+                cnn_feat = self.model.dino_align(self.cnn_feat["supervised"], dino_feat)
+                loss_t, sim_t = self.model.dino_align.dino_loss(cnn_feat, dino_feat, return_sim=True)
+                target_sims.append(sim_t.squeeze().detach().cpu().numpy())
+                target_masks.append(self.get_fg_mask(target_weak))
+
+        # a = 1
+        
+        import matplotlib.pyplot as plt
+        sm_pos = np.concatenate(source_masks, axis=0).reshape(-1) > thresh
+        tm_pos = np.concatenate(target_masks, axis=0).reshape(-1) > thresh
+        source_angs = np.arccos(np.concatenate(source_sims,axis=0).reshape(-1))*180/np.pi
+        target_angs = np.arccos(np.concatenate(target_sims,axis=0).reshape(-1))*180/np.pi
+        
+        plt.figure()
+        plt.hist(source_angs[sm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="FG Source sim", cumulative=0)
+        plt.hist(target_angs[tm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="FG Target sim", cumulative=0)
+        plt.hist(source_angs[~sm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="BG Source sim", cumulative=0)
+        plt.hist(target_angs[~tm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="BG Target sim", cumulative=0)
+        plt.xlabel('Angle')
+        plt.ylabel('Density')
+        plt.legend()
+
+    def get_fg_mask(self, data):
+        out = []
+        for img in data:
+            if 'segm_file' in img.keys():
+                file_split = img['file_name'].split('/')[:5]
+                file_split[3:] = ['gt_panoptic_trainval','gt_panoptic']
+                seg_file = '/'.join(file_split) + '/' + img['segm_file'].rsplit('_',1)[0] + '_panoptic.png'
+                tfs = img['tf_data']
+                seg_things = np.array(Image.open(seg_file))[:,:,1].astype(float)
+                seg_things = np.where(seg_things > 50, 1.0, 0.0)
+                mask = tfs.apply_segmentation(seg_things)
+                mask_small = torch.nn.functional.avg_pool2d(torch.tensor(np.copy(mask)).unsqueeze(0),14).squeeze().numpy() 
+                out.append(mask_small)
+            elif 'gt_masks' in img['instances']._fields.keys():
+                c, h, w = img['image'].shape
+                mask = sum([polygons_to_bitmask(x, h, w) for x in img['instances'].gt_masks.polygons]).astype(bool).astype(float)
+                mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask).unsqueeze(0),14).squeeze().numpy()
+                out.append(mask_small)
+        return np.stack(out)
+
+
+
     def test_relative(self):
 
         # """

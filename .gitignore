@@ -2,3 +2,4 @@
 output/*
 .vscode/*
 datasets/*
+wandb/*
