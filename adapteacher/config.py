@@ -70,6 +70,8 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.USE_DINO = False
     _C.SEMISUPNET.DINO_LOSS_WEIGHT = 1.0
     _C.SEMISUPNET.DINO_LOSS_WEIGHT_TARGET = 1.0
+    _C.SEMISUPNET.DINO_SOURCE_BG_WEIGHT = 1.0
+    _C.SEMISUPNET.DINO_SOURCE_FG_THRESH = 1.0
 
     # dataloader
     # supervision level

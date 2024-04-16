@@ -102,11 +102,14 @@ class DinoAlignHead(nn.Module):
             feat_cnn = F.normalize(feat_cnn, p=2, dim=1)
         return feat_cnn
     
-    def dino_loss(self, feat_cnn, feat_dino, return_sim=False):
+    def dino_loss(self, feat_cnn, feat_dino, return_sim=False, fg_mask=None):
         feat_cnn = feat_cnn.permute((0,2,3,1)).unsqueeze(-2)
         feat_dino = feat_dino.permute((0,2,3,1)).unsqueeze(-1)
         sim = torch.matmul(feat_cnn, feat_dino)
-        loss = (1-sim).mean()
+        if fg_mask is not None:
+            loss = ((1-sim.squeeze())*fg_mask.to(device=sim.device)).mean()
+        else:
+            loss = (1-sim).mean()
         if return_sim:
             return loss, sim
         else:

@@ -769,7 +769,11 @@ class ATeacherTrainer(DefaultTrainer):
             if self.use_dino:
                 dino_feat = self.model.dino_head(label_data_q)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
-                dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight
+                if self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0:
+                    mask = self.get_fg_mask_torch(label_data_q, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
+                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask) * self.dino_loss_weight
+                else:
+                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight
                 record_dict['loss_dino'] = dino_loss
 
             # weight losses
@@ -916,7 +920,11 @@ class ATeacherTrainer(DefaultTrainer):
             if self.use_dino:
                 dino_feat = self.model.dino_head(all_label_data)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
-                dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight
+                if self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0:
+                    mask = self.get_fg_mask_torch(all_label_data, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
+                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask) * self.dino_loss_weight
+                else:
+                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight
                 record_dict['loss_dino'] = dino_loss
 
             # 5. input strongly augmented unlabeled data into model
@@ -1307,7 +1315,16 @@ class ATeacherTrainer(DefaultTrainer):
                 out.append(mask_small)
         return np.stack(out)
 
-
+    def get_fg_mask_torch(self, data, thresh=0.2, bg_weight=1.0):
+        patch_size = self.cfg.INPUT.DINO_PATCH_SIZE
+        out = []
+        for img in data:
+            c, h, w = img['image'].shape
+            mask = sum([polygons_to_bitmask(x, h, w) for x in img['instances'].gt_masks.polygons]).astype(bool).astype(float)
+            mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask).unsqueeze(0),patch_size).squeeze()
+            mask_vals = torch.where(mask_small >= thresh, 1, bg_weight)
+            out.append(mask_small)
+        return torch.stack(out)
 
     def test_relative(self):
 
