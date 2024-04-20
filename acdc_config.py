@@ -12,7 +12,7 @@ config_file = "configs/" + run_type
 output_file = config_file.rsplit('/',1)[0] + "/faster_rcnn_VGG_cross_city_acdc.yaml"
 
 file_train = '("ACDC_train_{}",)'.format(dataset)
-file_test = '("ACDC_val_{}",)'.format(dataset)
+file_test = '("cityscapes_val","ACDC_val_{}",)'.format(dataset)
 
 with open(config_file) as f:
     y = yaml.safe_load(f)
