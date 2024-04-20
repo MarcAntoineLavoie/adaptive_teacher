@@ -74,6 +74,7 @@ import csv
 from adapteacher.engine.dino_extractor import DinoV2VitFeatureExtractor, DinoAlignHead
 from detectron2.structures.masks import polygons_to_bitmask
 from PIL import Image
+from fvcore.transforms.transform import PadTransform, HFlipTransform
 
 # Supervised-only Trainer
 class BaselineTrainer(DefaultTrainer):
@@ -727,8 +728,12 @@ class ATeacherTrainer(DefaultTrainer):
             label_data_q, label_data_k, label_regions, unlabel_data_q, unlabel_data_k, unlabel_regions = data
             label_data_q, _ = self.clean_detections(label_data_q, label_regions)
             unlabel_data_q, old_boxes = self.clean_detections(unlabel_data_q, unlabel_regions, output_old=True)
+        elif self.cfg.SEMISUPNET.USE_DINO:
+            label_data_q, label_data_k, label_regions, unlabel_data_q, unlabel_data_k, unlabel_regions = data
         else:
             label_data_q, label_data_k, unlabel_data_q, unlabel_data_k = data
+            label_regions = None
+            unlabel_regions = None
 
         data_time = time.perf_counter() - start
 
@@ -769,8 +774,8 @@ class ATeacherTrainer(DefaultTrainer):
             if self.use_dino:
                 dino_feat = self.model.dino_head(label_data_q)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
-                if self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0:
-                    mask = self.get_fg_mask_torch(label_data_q, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
+                if self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0 or self.cfg.INPUT.USE_RANDOM_NOISE:
+                    mask = self.get_fg_mask_torch(label_data_q, noise_regions=label_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask) * self.dino_loss_weight
                 else:
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight
@@ -920,8 +925,8 @@ class ATeacherTrainer(DefaultTrainer):
             if self.use_dino:
                 dino_feat = self.model.dino_head(all_label_data)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
-                if self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0:
-                    mask = self.get_fg_mask_torch(all_label_data, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
+                if self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0 or self.cfg.INPUT.USE_RANDOM_NOISE:
+                    mask = self.get_fg_mask_torch(all_label_data, noise_regions=label_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask) * self.dino_loss_weight
                 else:
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight
@@ -935,7 +940,11 @@ class ATeacherTrainer(DefaultTrainer):
             if self.use_dino:
                 dino_feat = self.model.dino_head(all_unlabel_data)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
-                dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight_target
+                if self.cfg.INPUT.USE_RANDOM_NOISE:
+                    mask = self.get_fg_mask_torch(all_unlabel_data, noise_regions=unlabel_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
+                    dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask) * self.dino_loss_weight_target
+                else:
+                    dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight_target
                 record_dict['loss_dino_pseud'] = dino_loss_pseudo
 
             new_record_all_unlabel_data = {}
@@ -1315,15 +1324,51 @@ class ATeacherTrainer(DefaultTrainer):
                 out.append(mask_small)
         return np.stack(out)
 
-    def get_fg_mask_torch(self, data, thresh=0.2, bg_weight=1.0):
+    def get_fg_mask_torch(self, data, noise_regions=None, thresh=0.2, bg_weight=1.0):
+        """
+        Generates foreground mask from segmentation GT and removes random noise and padding regions
+        Args:
+            data (list): list of input augmented images with gt instances and augmentation data
+            noise_region (list): list of XYWH coords of the random noise regions. Unscaled by the DINO scaling.
+            thresh (float): for each patch, assign to background or regions not evaluated if <20% of component pixels are FG
+            bg_weight (float): DINO align loss downscaled by weight if a background patch.
+
+        Returns:
+            list: list of per image downsampled mask to scale DINO align loss per patch.
+        """
+        
         patch_size = self.cfg.INPUT.DINO_PATCH_SIZE
         out = []
-        for img in data:
+        for i,img in enumerate(data):
             c, h, w = img['image'].shape
-            mask = sum([polygons_to_bitmask(x, h, w) for x in img['instances'].gt_masks.polygons]).astype(bool).astype(float)
-            mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask).unsqueeze(0),patch_size).squeeze()
-            mask_vals = torch.where(mask_small >= thresh, 1, bg_weight)
-            out.append(mask_small)
+            if len(img['instances']):
+                mask = sum([polygons_to_bitmask(x, h, w) for x in img['instances'].gt_masks.polygons]).astype(bool).astype(float)
+                mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask).unsqueeze(0),patch_size).squeeze()
+                mask_vals = torch.where(mask_small >= thresh, 1, bg_weight)
+            else:
+                mask_vals = torch.ones(int(h/patch_size),int(w/patch_size))
+
+            mask_valid = torch.ones(h,w)
+            if noise_regions is not None and i < len(noise_regions):
+                polygons_noise = [np.array([x[0],x[1],x[0]+x[2],x[1],x[0]+x[2],x[1]+x[3],x[0],x[1]+x[3],x[0],x[1]]) for x in noise_regions[i] if x]
+                mask_valid = mask_valid * ~polygons_to_bitmask(polygons_noise, h, w)
+            
+            tf_pad = [id for id,x in enumerate(img['tf_data']) if isinstance(x,PadTransform)]
+            is_flip = any([isinstance(x,HFlipTransform) for x in img['tf_data']])
+            if tf_pad:
+                pad_id = tf_pad[0]
+                scale = h / img['height']
+                pad = (np.array([img['tf_data'][pad_id].x1, img['tf_data'][pad_id].y1])*scale)#.floor()
+                if is_flip:
+                    polygons_pad = [[0,0, pad[0],0, pad[0],h-pad[1], w,h-pad[1], w,h, 0,h, 0,0]]
+                else:
+                    polygons_pad = [[w-pad[0],0, w,0, w,h, 0,h, 0,h-pad[1], w-pad[0],h-pad[1], w-pad[0],0]]
+                mask_valid = mask_valid * ~polygons_to_bitmask(polygons_pad, h, w)
+
+            mask_valid_small = torch.nn.functional.avg_pool2d(mask_valid.unsqueeze(0),patch_size).squeeze()
+            mask_eval = torch.where(mask_valid_small >= thresh, 1, 0)
+
+            out.append(mask_vals*mask_eval)
         return torch.stack(out)
 
     def test_relative(self):

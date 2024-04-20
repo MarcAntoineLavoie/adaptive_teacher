@@ -212,6 +212,7 @@ def build_detection_semisup_train_loader_two_crops(cfg, mapper=None):
         raise NotImplementedError("{} not yet supported.".format(sampler_name))
     else:
         raise ValueError("Unknown training sampler: {}".format(sampler_name))
+    return_regions = cfg.INPUT.CLEAN_DETECTIONS or cfg.SEMISUPNET.USE_DINO
     return build_semisup_batch_data_loader_two_crop(
         (label_dataset, unlabel_dataset),
         (label_sampler, unlabel_sampler),
@@ -219,7 +220,7 @@ def build_detection_semisup_train_loader_two_crops(cfg, mapper=None):
         cfg.SOLVER.IMG_PER_BATCH_UNLABEL,
         aspect_ratio_grouping=cfg.DATALOADER.ASPECT_RATIO_GROUPING,
         num_workers=cfg.DATALOADER.NUM_WORKERS,
-        clean_detect=cfg.INPUT.CLEAN_DETECTIONS,
+        clean_detect=return_regions,
     )
 
 
