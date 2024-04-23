@@ -11,10 +11,10 @@ class dino_preprocessing():
     Use the ImageNet preprocessing.
     """
 
-    def __init__(self, pixel_mean, pixel_std, is_RGB=False):
+    def __init__(self, pixel_mean, pixel_std, is_RGB=True):
         if is_RGB:
-            pixel_mean = pixel_mean.reverse()
-            pixel_std = pixel_std.reverse()
+            pixel_mean.reverse()
+            pixel_std.reverse()
 
         normalize = T.Normalize(mean=pixel_mean, std=pixel_std)        
         self.preprocessing_img = normalize
@@ -28,8 +28,8 @@ class DinoV2VitFeatureExtractor(nn.Module):
     """
     def __init__(self, cfg, cnn_dim, model_name='dinov2_vitb14'):
         super(DinoV2VitFeatureExtractor, self).__init__()
-        self.preprocessing = dino_preprocessing(cfg.MODEL.PIXEL_MEAN, cfg.MODEL.PIXEL_STD, is_RGB=False)
-        self.is_RGB = False
+        self.preprocessing = dino_preprocessing(cfg.MODEL.PIXEL_MEAN, cfg.MODEL.PIXEL_STD, is_RGB=True)
+        self.is_RGB = True
         self.normalize_feature = True
         dino_v2_models = {
             "dinov2_vits14": (14, 384, dinov2_vits14), # patch_size, output dims, function name to create model

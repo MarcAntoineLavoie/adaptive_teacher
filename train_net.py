@@ -41,6 +41,7 @@ def setup(args):
     cfg.merge_from_list(args.opts)
     # cfg = scale_configs(cfg)
     cfg['DATALOADER']['NUM_WORKERS'] = 8
+    cfg['MODEL']['PIXEL_STD'] = [57.375, 57.120, 58.395]
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
@@ -140,8 +141,18 @@ if __name__ == "__main__":
     # args.output_dir = 'output/test_v2_align_contrast010_temp100/'
     # args.output_dir = 'output/test_v2_align_contrast010_gtprops/'
     # args.output_dir = 'output/test_v2_short_align010_centre_gtprops_mmd/'
-    # args.output_dir = 'output/test_dino_nom_dino050/'
+    # args.output_dir = 'output/dino/test_dino_nom_dino050/'
+    # args.output_dir = 'output/dino/test_dino_nom_dino050_smask020_w010/'
+    # args.output_dir = 'output/dino/test_dino_rain_dino050_010/'
+    # args.output_dir = 'output/dino/test_dino_rain_dino050_050/'
+    # args.output_dir = 'output/dino/test_dino_nom_dino100/'
+    # args.output_dir = 'output/dino/test_dino_nom_dino010/'
     # args.output_dir = 'output/test_dinonom_DA/'
+    # args.output_dir = 'output/dino/test_nom_noDAINST/'
+    # args.output_dir = 'output/dino/test_dino_rain_dino050_010_PL/'
+    # args.output_dir = 'output/test_v2_nom080_checks/'
+
+    
 
     # args.use_old_cfg = True
     args.use_old_cfg = False
