@@ -19,6 +19,7 @@ INPUT:
   DINO_PATCH_SIZE: 14
   PAD_CROP: True
 MODEL:
+  PIXEL_STD: [57.375, 57.120, 58.395]
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
   META_ARCHITECTURE: "ProbDATwoStagePseudoLabGeneralizedRCNN"
   # META_ARCHITECTURE: "DAobjTwoStagePseudoLabGeneralizedRCNN"
