@@ -941,7 +941,7 @@ class ATeacherTrainer(DefaultTrainer):
                 dino_feat = self.model.dino_head(all_unlabel_data)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
                 if self.cfg.INPUT.USE_RANDOM_NOISE:
-                    mask = self.get_fg_mask_torch(all_unlabel_data, noise_regions=unlabel_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
+                    mask = self.get_fg_mask_torch(all_unlabel_data, noise_regions=unlabel_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT, has_segm=False)
                     dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask) * self.dino_loss_weight_target
                 else:
                     dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight_target
@@ -1324,7 +1324,7 @@ class ATeacherTrainer(DefaultTrainer):
                 out.append(mask_small)
         return np.stack(out)
 
-    def get_fg_mask_torch(self, data, noise_regions=None, thresh=0.2, bg_weight=1.0):
+    def get_fg_mask_torch(self, data, noise_regions=None, thresh=0.2, bg_weight=1.0, has_segm=True):
         """
         Generates foreground mask from segmentation GT and removes random noise and padding regions
         Args:
@@ -1341,7 +1341,7 @@ class ATeacherTrainer(DefaultTrainer):
         out = []
         for i,img in enumerate(data):
             c, h, w = img['image'].shape
-            if len(img['instances']):
+            if len(img['instances']) and has_segm:
                 mask = sum([polygons_to_bitmask(x, h, w) for x in img['instances'].gt_masks.polygons]).astype(bool).astype(float)
                 mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask).unsqueeze(0),patch_size).squeeze()
                 mask_vals = torch.where(mask_small >= thresh, 1, bg_weight)

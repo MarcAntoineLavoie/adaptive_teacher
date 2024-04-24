@@ -256,6 +256,11 @@ class DatasetMapperTwoCropSeparate_detect(DatasetMapper):
         image_weak_aug, sem_seg_gt = aug_input.image, aug_input.sem_seg
         image_shape = image_weak_aug.shape[:2]  # h, w
 
+        if 'foggy' in dataset_dict['file_name']:
+            mask_format = "bitmask"
+        else:
+            mask_format = self.mask_format
+
         if sem_seg_gt is not None:
             dataset_dict["sem_seg"] = torch.as_tensor(sem_seg_gt.astype("long"))
 
@@ -291,12 +296,12 @@ class DatasetMapperTwoCropSeparate_detect(DatasetMapper):
                 if obj.get("iscrowd", 0) == 0
             ]
             if len(annos):
-                if 'segmentation' in annos[0].keys():
+                if 'segmentation' in annos[0].keys() and mask_format == "polygon":
                     for lv1 in range(len(annos)):
                         # annos[lv1]['segmentation'] = [annos[lv1]['segmentation'][0].reshape(-1,2)]
                         annos[lv1]['segmentation'] = [x.tolist() for x in annos[lv1]['segmentation']]
             instances = utils.annotations_to_instances(
-                annos, image_shape, mask_format=self.mask_format
+                annos, image_shape, mask_format=mask_format
             )
 
             if self.compute_tight_boxes and instances.has("gt_masks"):
