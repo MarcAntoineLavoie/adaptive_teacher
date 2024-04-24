@@ -115,13 +115,13 @@ def main(args):
 
 
 if __name__ == "__main__":
-    args = default_argument_parser().parse_args()
+    parser = default_argument_parser()
+    parser.add_argument("--acdc-type", default=None, help="acdc run type")
+    args = parser.parse_args()
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
     args.dist_url = (':').join(url_parts)
 
-    if not "acdc_type" in sys.argv:
-        args.acdc_type = None
     #   --num-gpus 8\
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\
     #   OUTPUT_DIR output/exp_city
