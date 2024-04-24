@@ -1261,7 +1261,7 @@ class ATeacherTrainer(DefaultTrainer):
     def test_DINO(self):
         self.model = self.model.eval()
         self.branch = "supervised"
-        thresh = 0.15
+        thresh = 0.20
         with torch.no_grad():
             source_sims = []
             target_sims = []
@@ -1271,7 +1271,7 @@ class ATeacherTrainer(DefaultTrainer):
                 if not x % 10:
                     print(x)
                 data = next(self._trainer._data_loader_iter)
-                source_strong, source_weak, target_strong, target_weak = data
+                source_strong, source_weak, rs1, target_strong, target_weak, sr2 = data
 
                 _, _ = self.model(source_weak, branch="supervised")
                 dino_feat = self.model.dino_head(source_weak)
@@ -1295,14 +1295,27 @@ class ATeacherTrainer(DefaultTrainer):
         source_angs = np.arccos(np.concatenate(source_sims,axis=0).reshape(-1))*180/np.pi
         target_angs = np.arccos(np.concatenate(target_sims,axis=0).reshape(-1))*180/np.pi
         
-        plt.figure()
-        plt.hist(source_angs[sm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="FG Source sim", cumulative=0)
-        plt.hist(target_angs[tm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="FG Target sim", cumulative=0)
-        plt.hist(source_angs[~sm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="BG Source sim", cumulative=0)
-        plt.hist(target_angs[~tm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="BG Target sim", cumulative=0)
-        plt.xlabel('Angle')
-        plt.ylabel('Density')
-        plt.legend()
+        sfg_mean = source_angs[sm_pos].mean()
+        sbg_mean = source_angs[~sm_pos].mean()
+        tfg_mean = target_angs[tm_pos].mean()
+        tbg_mean = target_angs[~tm_pos].mean()
+
+        fig1, ax1 = plt.subplots(1,2,sharey=True,figsize=[8,4])
+        ax1[0].hist(source_angs[~sm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="BG Source, avg={0:.0f}".format(sbg_mean), cumulative=0)
+        ax1[0].hist(source_angs[sm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="FG Source, avg={0:.0f}".format(sfg_mean), cumulative=0)
+        ax1[0].set_xlabel('Angle')
+        ax1[0].set_ylabel('Density')
+        ax1[0].legend()
+        ax1[0].grid(True)
+        ax1[1].hist(target_angs[~tm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="BG Target, avg={0:.0f}".format(tbg_mean), cumulative=0)
+        ax1[1].hist(target_angs[tm_pos], bins=np.arange(0,101,1), alpha=0.6, density=True, label="FG Target, avg={0:.0f}".format(tfg_mean), cumulative=0)
+        ax1[1].set_xlabel('Angle')
+        # ax1[1].set_ylabel('Density')
+        ax1[1].legend()
+        ax1[1].grid(True)
+
+        plt.title('Angle Distribution, weight=0.1, 40k iter.')
+        plt.show()
 
     def get_fg_mask(self, data):
         out = []
@@ -1988,9 +2001,10 @@ class SinkLoss(nn.Module):
     
 def temp_plots():
     import matplotlib.pyplot as plt
+    import matplotlib
     from detectron2.utils.visualizer import Visualizer
     names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
-    curr_id = 1
+    curr_id = 0
     curr_data = label_data_k
     # curr_data = all_label_data
     img_ = curr_data[curr_id]['image'].transpose(0,1).transpose(1,2)
@@ -2002,6 +2016,21 @@ def temp_plots():
     temp.tensor = temp.tensor.cpu()
     test_v.overlay_instances(boxes=temp, labels=labels)
     img = test_v.get_output().get_image()
+    temp2 = [x.tolist() for x in temp]
+    patches = [matplotlib.patches.Rectangle((x[0],x[1]),x[2]-x[0],x[3]-x[1],color='red',alpha=0.6) for x  in temp2]
+
+    curr_data = label_data_k
+    # curr_data = all_label_data
+    img_ = curr_data[curr_id]['image'].transpose(0,1).transpose(1,2)
+    test_v = Visualizer(img_[:, :, [2,1,0]])
+    temp = curr_data[curr_id]['instances'].gt_boxes
+    labels = [names[x] for x in curr_data[curr_id]['instances'].gt_classes.tolist()]
+    # temp = proposals_roih_unsup_k[curr_id].pred_boxes
+    temp.tensor = temp.tensor.cpu()
+    test_v.overlay_instances(boxes=temp, labels=labels)
+    img2 = test_v.get_output().get_image()
+    temp2 = [x.tolist() for x in temp]
+    patches2 = [matplotlib.patches.Rectangle((x[0],x[1]),x[2]-x[0],x[3]-x[1],color='red',alpha=0.6) for x  in temp2]
 
     test_v2 = Visualizer(img_[:, :, [2,1,0]])
     temp2 = curr_data[curr_id]['instances_gt'].gt_boxes
@@ -2048,11 +2077,68 @@ def temp_plots():
     # test_v4.overlay_instances(boxes=temp4[n], labels=labels4)
     img4 = test_v4.get_output().get_image()
 
+    fig, ax =  plt.subplots(1,2,figsize=[10,3])
+    ax[0].imshow(img2)
+    for patch in patches2: ax[0].add_patch(patch)
+    ax[1].imshow(img)
+    for patch in patches: ax[1].add_patch(patch)
+    plt.tight_layout()
+    plt.show()
+
     plt.figure();plt.imshow(img)
     plt.figure();plt.imshow(img2)
     plt.figure();plt.imshow(img3)
     plt.figure();plt.imshow(img4)
     plt.show()
+
+def temp_pseudo_labels():
+    import matplotlib.pyplot as plt
+    from copy import copy
+
+    file_in = '/home/marc/.adapt/output/test_v2_nom080_checks/pseudo_stats.csv'
+    # data_, names = np.genfromtxt(file_in, names=True)
+    data_ = np.genfromtxt(file_in, skip_header=1)
+    data_ = data_[:40000,:]
+    data_[1::2,0] = data_[1::2,0] + 0.5
+    data2 = copy(data_)
+    m = 0.01
+    for i in range(1,data2.shape[0]):
+        data2[i,1:] = data2[i-1,1:]*(1-m) + m*data_[i,1:]
+    # ['person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcylce', 'bicycle', 'all']
+    # iter person_gt person_raw50 person_raw75 person_rawn25 person_sel50 person_sel75 person_seln25
+    # plt.figure();plt.plot(data2[:,0],data2[:,1]);plt.plot(data2[:,0],data2[:,2]);plt.plot(data2[:,0],data2[:,5]);plt.plot(data2[:,0],data2[:,7])
+    plt.figure();plt.plot(data2[:,0],data2[:,15]);plt.plot(data2[:,0],data2[:,16]);plt.plot(data2[:,0],data2[:,19]);plt.plot(data2[:,0],data2[:,21])
+    # plt.figure();plt.plot(data2[:,0],data2[:,22]);plt.plot(data2[:,0],data2[:,23]);plt.plot(data2[:,0],data2[:,26]);plt.plot(data2[:,0],data2[:,28])
+    plt.figure();plt.plot(data2[:,0],data2[:,29]);plt.plot(data2[:,0],data2[:,30]);plt.plot(data2[:,0],data2[:,33]);plt.plot(data2[:,0],data2[:,35])
+
+
+    plt.rcParams.update({'font.size': 10})
+    fig, ax = plt.subplots(1,2,figsize=[8,4])
+    ax[0].plot(data2[:,0],data2[:,15],label='GT');ax[0].plot(data2[:,0],data2[:,16],label='Raw PL @50');ax[0].plot(data2[:,0],data2[:,19],label='Filtered PL @50');ax[0].plot(data2[:,0],data2[:,21],label='False Pos. @25')
+    ax[0].set_title('Car Pseudo-Labels, Foggy Cityscapes');ax[0].set_xlabel('Iterations');ax[0].set_ylabel('Label Count');ax[0].grid(True);ax[0].legend()
+    ax[1].plot(data2[:,0],data2[:,29],label='GT');ax[1].plot(data2[:,0],data2[:,30],label='Raw PL @50');ax[1].plot(data2[:,0],data2[:,33],label='Filtered PL @50');ax[1].plot(data2[:,0],data2[:,35],label='False Pos. @25')
+    ax[1].set_title('Bus Pseudo-Labels, Foggy Cityscapes');ax[1].set_xlabel('Iterations');ax[1].set_ylabel('Label Count');ax[1].grid(True);ax[1].legend()
+    plt.tight_layout()
+    
+    plt.rcParams.update({'font.size': 12})
+    labels = ['person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcylce', 'bicycle']
+    counts_cs = [17919, 1781, 26963, 484, 379, 168, 737, 3675]
+    counts_acdc_rain = [237, 21, 1433, 31, 37, 37, 77, 93]
+
+    from matplotlib import gridspec
+    fig = plt.figure(figsize=[8,4])
+    gs = gridspec.GridSpec(1, 3, width_ratios=[1,1,0.4]) 
+    ax0 = plt.subplot(gs[0]);ax1 = plt.subplot(gs[1]);ax2=plt.subplot(gs[2])
+    ax0.pie(counts_cs,radius=1.3);ax0.set_title('Cityscapes labels, \n total=52106')
+    pie = ax1.pie(counts_acdc_rain,radius=1.3);ax1.set_title('ACDC Rain labels, \n total=1966')
+    ax2.axis("off")
+    ax2.legend(pie[0],labels,loc='right')
+    plt.tight_layout()
+    plt.show()
+
+
+    # plt.figure();plt.pie(counts_acdc_rain, labels=labels)
+    # plt.show() 
 
 # def temp_cam():
 #     self.gradient = []
@@ -2324,3 +2410,34 @@ def temp_plots():
 # dist2 = torch.cdist(vals_t,vals_t).mean()
 # dist3 = torch.cdist(vals_s,vals_s).mean()
 # final = dist1*2-dist2-dist3
+
+
+def temps():
+    import matplotlib.pyplot as plt
+    import matplotlib
+    from detectron2.utils.visualizer import Visualizer
+    names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
+    curr_id = 0
+    curr_data = label_data_k
+    # curr_data = all_label_data
+    img_ = curr_data[curr_id]['image'].transpose(0,1).transpose(1,2)
+
+    test_v2 = Visualizer(img_[:, :, [2,1,0]])
+    temp2 = curr_data[curr_id]['instances_gt'].gt_boxes
+    labels2 = [names[x] for x in curr_data[curr_id]['instances_gt'].gt_classes.tolist()]
+    # test_v2 = Visualizer(label_data_k[curr_id]['image'].transpose(0,1).transpose(1,2)[:, :, [2,1,0]])
+    # temp2 = label_data_k[curr_id]['instances'].gt_boxes
+    temp2.tensor = temp2.tensor.cpu()
+    test_v2.overlay_instances(boxes=temp2, labels=labels2)
+    img2 = test_v2.get_output().get_image()
+
+    target_point = [265,442]
+    cnn_point = [8,14]
+    dino_point = [20,29]
+    cnn_feat1 = torch.nn.functional.normalize(cnn_feat1,dim=1)
+    cnn_feat2 = torch.nn.functional.normalize(cnn_feat2,dim=1)
+    sim2 = (cnn_feat2 * cnn_feat1[0,:,8,14].view(1,-1,1,1)).sum(dim=1)
+
+    sim_d = (dino_feat1 * dino_feat1[0,:,20,29].view(1,-1,1,1)).sum(dim=1)
+
+    (dino_features * selected_feature.view(1, -1, 1, 1)).sum(dim=1)

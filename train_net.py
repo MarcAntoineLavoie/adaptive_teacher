@@ -21,6 +21,7 @@ from adapteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
 from math import floor 
 import os
 from random import randint
+import sys
 
 def setup(args):
     """
@@ -42,6 +43,9 @@ def setup(args):
     # cfg = scale_configs(cfg)
     cfg['DATALOADER']['NUM_WORKERS'] = 8
     cfg['MODEL']['PIXEL_STD'] = [57.375, 57.120, 58.395]
+    if args.acdc_type is not None:
+        cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_{}".format(args.acdc_type))
+        cfg.DATASETS.TRAIN_UNLABEL = ("ACDC_train_{}".format(args.acdc_type),)
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
@@ -115,6 +119,9 @@ if __name__ == "__main__":
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
     args.dist_url = (':').join(url_parts)
+
+    if not "acdc_type" in sys.argv:
+        args.acdc_type = None
     #   --num-gpus 8\
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\
     #   OUTPUT_DIR output/exp_city
