@@ -133,7 +133,7 @@ def main(args):
 if __name__ == "__main__":
     parser = default_argument_parser()
     parser.add_argument("--acdc-type", default=None, help="acdc run type")
-    parser.add_argument("--use_wandb", default=False, help="use wandb to log run")
+    parser.add_argument("--use-wandb", default=False, help="use wandb to log run")
     args = parser.parse_args()
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
