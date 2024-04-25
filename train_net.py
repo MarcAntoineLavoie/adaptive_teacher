@@ -22,6 +22,7 @@ from math import floor
 import os
 from random import randint
 import sys
+import wandb
 
 def setup(args):
     """
@@ -108,19 +109,36 @@ def main(args):
             res = Trainer.test(cfg, model)
         return res
 
-    trainer = Trainer(cfg)
+    name = cfg.OUTPUT_DIR.rsplit('/')[-1]
+    if args.use_wandb:
+        run = wandb.init(
+            # set the wandb project where this run will be logged
+            project="test_dino",
+            name=name
+            # track hyperparameters and run metadata
+            # config='/'.join((cfg.OUTPUT_DIR,'config.yaml'))
+        )
+    else:
+        run = None
+
+    trainer = Trainer(cfg, wandb_run=run)
     trainer.resume_or_load(resume=args.resume)
+    out = trainer.train()
 
-    return trainer.train()
+    if args.use_wandb:
+        run.finish()
 
+    return out
 
 if __name__ == "__main__":
     parser = default_argument_parser()
     parser.add_argument("--acdc-type", default=None, help="acdc run type")
+    parser.add_argument("--use_wandb", default=False, help="use wandb to log run")
     args = parser.parse_args()
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
     args.dist_url = (':').join(url_parts)
+    # args.use_wandb=True
 
     #   --num-gpus 8\
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\

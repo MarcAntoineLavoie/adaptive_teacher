@@ -75,6 +75,7 @@ from adapteacher.engine.dino_extractor import DinoV2VitFeatureExtractor, DinoAli
 from detectron2.structures.masks import polygons_to_bitmask
 from PIL import Image
 from fvcore.transforms.transform import PadTransform, HFlipTransform
+import wandb
 
 # Supervised-only Trainer
 class BaselineTrainer(DefaultTrainer):
@@ -313,7 +314,7 @@ class BaselineTrainer(DefaultTrainer):
 
 # Adaptive Teacher Trainer
 class ATeacherTrainer(DefaultTrainer):
-    def __init__(self, cfg):
+    def __init__(self, cfg, wandb_run=None):
         """
         Args:
             cfg (CfgNode):
@@ -453,7 +454,11 @@ class ATeacherTrainer(DefaultTrainer):
                     csv_writer = csv.writer(f_out, delimiter=' ')
                     csv_writer.writerow(columns)
 
-
+        if wandb_run is not None:
+            self.log_wandb = True
+            self.wandb_run = wandb_run
+        else:
+            self.log_wandb = False
 
         # self.target_layer_name = ['backbone.vgg2.8','backbone.vgg3.8','backbone.vgg4.8','proposal_generator.rpn_head.conv']
         # self.activations_grads = []
@@ -1046,6 +1051,8 @@ class ATeacherTrainer(DefaultTrainer):
             total_losses_reduced = sum(loss for loss in loss_dict.values())
 
             self.storage.put_scalar("total_loss", total_losses_reduced)
+            if self.log_wandb:
+                self.wandb_run.log(metrics_dict)
             if len(metrics_dict) > 1:
                 self.storage.put_scalars(**metrics_dict)
 
@@ -1122,11 +1129,15 @@ class ATeacherTrainer(DefaultTrainer):
                 k + "_student": self._last_eval_results_student[k]
                 for k in self._last_eval_results_student.keys()
             }
+            if self.log_wandb:
+                self.wandb_run.log(_last_eval_results_student)
             return _last_eval_results_student
 
         def test_and_save_results_teacher():
             self._last_eval_results_teacher = self.test(
                 self.cfg, self.model_teacher)
+            if self.log_wandb:
+                self.wandb_run.log(self._last_eval_results_teacher)
             return self._last_eval_results_teacher
 
         ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
