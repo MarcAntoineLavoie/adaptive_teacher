@@ -13,8 +13,8 @@ class dino_preprocessing():
 
     def __init__(self, pixel_mean, pixel_std, is_RGB=True):
         if is_RGB:
-            pixel_mean.reverse()
-            pixel_std.reverse()
+            pixel_mean = torch.tensor(pixel_mean)[[2,1,0]]
+            pixel_std = torch.tensor(pixel_std)[[2,1,0]]
 
         normalize = T.Normalize(mean=pixel_mean, std=pixel_std)        
         self.preprocessing_img = normalize
