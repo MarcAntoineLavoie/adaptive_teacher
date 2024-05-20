@@ -37,13 +37,16 @@ def setup(args):
         cfg.SOLVER.IMG_PER_BATCH_LABEL = 2
         cfg.SOLVER.IMG_PER_BATCH_UNLABEL = 2
         # cfg.TEST.EVAL_PERIOD = 20
+        # cfg.DATASETS.TEST = ("cityscapes_val","cityscapes_foggy_val","ACDC_val_rain","ACDC_val_fog")
         # cfg.DATASETS.TEST = ("cityscapes_val",)
+        cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_rain")
     else:
         cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     # cfg = scale_configs(cfg)
     cfg['DATALOADER']['NUM_WORKERS'] = 8
-    cfg['MODEL']['PIXEL_STD'] = [57.375, 57.120, 58.395]
+    # cfg.SOLVER.CHECKPOINT_PERIOD = 50
+    # cfg['MODEL']['PIXEL_STD'] = [1.0, 1.0, 1.0]
     if args.acdc_type is not None:
         cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_{}".format(args.acdc_type))
         cfg.DATASETS.TRAIN_UNLABEL = ("ACDC_train_{}".format(args.acdc_type),)
@@ -97,8 +100,8 @@ def main(args):
             DetectionCheckpointer(
                 ensem_ts_model, save_dir=cfg.OUTPUT_DIR
             ).resume_or_load(cfg.MODEL.WEIGHTS, resume=args.resume)
-            # res = Trainer.test(cfg, ensem_ts_model.modelTeacher)
-            res = Trainer.test(cfg, ensem_ts_model.modelStudent)
+            res = Trainer.test(cfg, ensem_ts_model.modelTeacher)
+            # res = Trainer.test(cfg, ensem_ts_model.modelStudent)
 
         else:
             model = Trainer.build_model(cfg)
@@ -138,7 +141,7 @@ if __name__ == "__main__":
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
     args.dist_url = (':').join(url_parts)
-    # args.use_wandb=True
+    args.use_wandb=True
 
     #   --num-gpus 8\
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\
@@ -146,11 +149,12 @@ if __name__ == "__main__":
 
     # args.num_gpus = 1
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
+    args.config_file = './configs/faster_rcnn_VGG_cross_city_tiny.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_test.yaml'
     # args.config_file = './configs/faster_rcnn_R101_cross_clipart_v2.yaml'
-    # args.resume = False
-    args.resume = True
+    args.resume = False
+    # args.resume = True
 
     # args.OUTPUT_DIR = './output/temp1'
 
@@ -166,18 +170,29 @@ if __name__ == "__main__":
     # args.output_dir = 'output/test_v2_align_contrast010_temp100/'
     # args.output_dir = 'output/test_v2_align_contrast010_gtprops/'
     # args.output_dir = 'output/test_v2_short_align010_centre_gtprops_mmd/'
-    # args.output_dir = 'output/dino/test_dino_nom_dino050/'
     # args.output_dir = 'output/dino/test_dino_nom_dino050_smask020_w010/'
     # args.output_dir = 'output/dino/test_dino_rain_dino050_010/'
     # args.output_dir = 'output/dino/test_dino_rain_dino050_050/'
-    # args.output_dir = 'output/dino/test_dino_nom_dino100/'
     # args.output_dir = 'output/dino/test_dino_nom_dino010/'
-    # args.output_dir = 'output/test_dinonom_DA/'
+    # args.output_dir = 'output/dino/test_dino_nom_dino050/'
+    # args.output_dir = 'output/dino/test_dino_nom_dino100/'
     # args.output_dir = 'output/dino/test_nom_noDAINST/'
+    # args.output_dir = 'output/test_dinonom_DA/'
     # args.output_dir = 'output/dino/test_dino_rain_dino050_010_PL/'
     # args.output_dir = 'output/test_v2_nom080_checks/'
+    # args.output_dir = 'output/dino/test_dino_rain_DA/'
+    # args.output_dir = 'output/dino/test_dino_rain_DA_PL/'
+    # args.output_dir = 'output/dino/test_nom_noDAINST/'
+    # args.output_dir = 'output/dino/dgx_dino/test_dino_rain_dino050_000_augs_dgx/'
+    # args.output_dir = 'output/dino/dgx_dino/test_dino_nom_augs_dgx/'
+    # args.output_dir = 'output/dino/dgx_dino/test_dino_TR_rain_DA_PL_augs_TU/'
+    # args.output_dir = 'output/dino/dgx_dino/test_dino_TR_rain_DA_PL_augs_TU/'
+    # args.output_dir = 'output/dino/dino_tests/test_no_pseudo/'
+    # args.output_dir = 'output/dino/dino_tests/test_all_pseudo/'
+    # args.output_dir = 'output/dino/dino_tests/test_print6000/'
+    # args.output_dir = 'output/dino/dino_tests/test_debug7000/'
 
-    
+
 
     # args.use_old_cfg = True
     args.use_old_cfg = False

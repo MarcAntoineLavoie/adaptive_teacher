@@ -759,7 +759,8 @@ class ATeacherTrainer(DefaultTrainer):
             self._update_teacher_model(
                 keep_rate=self.cfg.SEMISUPNET.EMA_KEEP_RATE)
 
-        if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP:
+        check = self.iter > 1000 and self.iter <= 2000
+        if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP and not check: # or self.cfg.SEMISUPNET.UNSUP_BYPASS == "Skip":
             # input both strong and weak supervised data into model
             label_data_q.extend(label_data_k)
             if self.align_gt_proposals:
@@ -1011,6 +1012,7 @@ class ATeacherTrainer(DefaultTrainer):
         self.optimizer.zero_grad()
         losses.backward()
         self.optimizer.step()
+        print("optimizer",self.iter)
 
     def _write_metrics(self, metrics_dict: dict):
         metrics_dict = {
@@ -1076,6 +1078,7 @@ class ATeacherTrainer(DefaultTrainer):
                 raise Exception("{} is not found in student model".format(key))
 
         self.model_teacher.load_state_dict(new_teacher_dict)
+        print("teacher",self.iter)
 
     @torch.no_grad()
     def _copy_main_model(self):
@@ -1140,12 +1143,12 @@ class ATeacherTrainer(DefaultTrainer):
                 self.wandb_run.log(self._last_eval_results_teacher)
             return self._last_eval_results_teacher
 
-        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-                   test_and_save_results_student))
-        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-                   test_and_save_results_teacher))
         # ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
         #            test_and_save_results_student))
+        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
+                   test_and_save_results_teacher))
+        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
+                   test_and_save_results_student))
 
         if comm.is_main_process():
             # run writers in the end, so that evaluation metrics are written
@@ -2452,3 +2455,25 @@ def temps():
     sim_d = (dino_feat1 * dino_feat1[0,:,20,29].view(1,-1,1,1)).sum(dim=1)
 
     (dino_features * selected_feature.view(1, -1, 1, 1)).sum(dim=1)
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    file_paths = ['/'.join(('./plots/runs',x)) for x in os.listdir('./plots/runs')]
+    runs = [np.genfromtxt(x,skip_header=1,delimiter=',') for x in file_paths]
+    runs_2 = [runs[x] for x in [1,2,0,5,4,3]]
+    legend = ['Pure S','DI','DI + PL','DINO 0.5 & 0.1', 'DINO 0.5 & 0.5', 'DINO 0.5 & 0.1 + PL']
+
+    plt.rcParams.update({'font.size': 12})
+    plt.figure()
+    for idx,run in enumerate(runs_2): plt.plot(run[:,1],run[:,2],label=legend[idx])
+    plt.xlabel('Iterations');plt.ylabel('Mean Accuracy @50');plt.legend();plt.tight_layout();plt.grid(True)
+    plt.show()
+
+def temp_run():
+    import detectron2
+    for name, module in self.model.named_modules():
+        module_type = type(module)
+        if module_type == torch.nn.modules.conv.Conv2d or module_type == detectron2.layers.wrappers.Conv2d:
+            print(name, module.weight.sum().item())
+        elif module_type == torch.nn.modules.batchnorm.BatchNorm2d:
+            print(name, module.running_mean.sum().item())
