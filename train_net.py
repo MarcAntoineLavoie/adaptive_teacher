@@ -141,7 +141,7 @@ if __name__ == "__main__":
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
     args.dist_url = (':').join(url_parts)
-    args.use_wandb=True
+    # args.use_wandb=True
 
     #   --num-gpus 8\
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\
@@ -149,12 +149,12 @@ if __name__ == "__main__":
 
     # args.num_gpus = 1
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
-    args.config_file = './configs/faster_rcnn_VGG_cross_city_tiny.yaml'
+    # args.config_file = './configs/faster_rcnn_VGG_cross_city_tiny.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_test.yaml'
     # args.config_file = './configs/faster_rcnn_R101_cross_clipart_v2.yaml'
-    args.resume = False
-    # args.resume = True
+    # args.resume = False
+    args.resume = True
 
     # args.OUTPUT_DIR = './output/temp1'
 

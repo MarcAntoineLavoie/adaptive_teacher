@@ -759,8 +759,7 @@ class ATeacherTrainer(DefaultTrainer):
             self._update_teacher_model(
                 keep_rate=self.cfg.SEMISUPNET.EMA_KEEP_RATE)
 
-        check = self.iter > 1000 and self.iter <= 2000
-        if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP and not check: # or self.cfg.SEMISUPNET.UNSUP_BYPASS == "Skip":
+        if self.iter < self.cfg.SEMISUPNET.BURN_UP_STEP:
             # input both strong and weak supervised data into model
             label_data_q.extend(label_data_k)
             if self.align_gt_proposals:
@@ -1012,7 +1011,6 @@ class ATeacherTrainer(DefaultTrainer):
         self.optimizer.zero_grad()
         losses.backward()
         self.optimizer.step()
-        print("optimizer",self.iter)
 
     def _write_metrics(self, metrics_dict: dict):
         metrics_dict = {
@@ -1078,7 +1076,6 @@ class ATeacherTrainer(DefaultTrainer):
                 raise Exception("{} is not found in student model".format(key))
 
         self.model_teacher.load_state_dict(new_teacher_dict)
-        print("teacher",self.iter)
 
     @torch.no_grad()
     def _copy_main_model(self):
@@ -1143,12 +1140,12 @@ class ATeacherTrainer(DefaultTrainer):
                 self.wandb_run.log(self._last_eval_results_teacher)
             return self._last_eval_results_teacher
 
-        # ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-        #            test_and_save_results_student))
-        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-                   test_and_save_results_teacher))
         ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
                    test_and_save_results_student))
+        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
+                   test_and_save_results_teacher))
+        # ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
+        #            test_and_save_results_student))
 
         if comm.is_main_process():
             # run writers in the end, so that evaluation metrics are written
