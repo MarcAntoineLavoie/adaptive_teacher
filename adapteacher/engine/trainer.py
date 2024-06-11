@@ -917,7 +917,7 @@ class ATeacherTrainer(DefaultTrainer):
             self.branch = "supervised"
             if 1:
                 record_all_label_data, _, _, _ = self.model(
-                    all_label_data, branch="supervised", use_gt_only=False
+                    all_label_data, branch="supervised", #use_gt_only=False
                 )
                 record_dict.update(record_all_label_data)
             else:
@@ -940,7 +940,8 @@ class ATeacherTrainer(DefaultTrainer):
             # 5. input strongly augmented unlabeled data into model
             self.branch = "supervised_target"
             record_all_unlabel_data, _, _, _ = self.model(
-                all_unlabel_data, branch="supervised_target", use_gt_only=self.use_gt_proposals_only
+                # all_unlabel_data, branch="supervised_target", use_gt_only=self.use_gt_proposals_only
+                all_unlabel_data, branch="supervised_target", #use_gt_only=self.use_gt_proposals_only
             )
             if self.use_dino:
                 dino_feat = self.model.dino_head(all_unlabel_data)

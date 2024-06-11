@@ -23,6 +23,18 @@ import os
 from random import randint
 import sys
 import wandb
+import yaml
+
+from collections.abc import MutableMapping
+def flatten_dict(dictionary, parent_key='', separator='.'):
+    items = []
+    for key, value in dictionary.items():
+        new_key = parent_key + separator + key if parent_key else key
+        if isinstance(value, MutableMapping):
+            items.extend(flatten_dict(value, new_key, separator=separator).items())
+        else:
+            items.append((new_key, value))
+    return dict(items)
 
 def setup(args):
     """
@@ -50,6 +62,7 @@ def setup(args):
     if args.acdc_type is not None:
         cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_{}".format(args.acdc_type))
         cfg.DATASETS.TRAIN_UNLABEL = ("ACDC_train_{}".format(args.acdc_type),)
+    cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_fog","ACDC_val_night","ACDC_val_rain","ACDC_val_snow")
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
@@ -112,14 +125,22 @@ def main(args):
             res = Trainer.test(cfg, model)
         return res
 
-    name = cfg.OUTPUT_DIR.rsplit('/')[-1]
+    split_name = cfg.OUTPUT_DIR.rsplit('/',1)
+    name = split_name[-1]
+    run_dir = split_name[0]
+    # name = "config_test"
+    conf_file='/'.join((cfg.OUTPUT_DIR,'config.yaml'))
+    with open(conf_file) as yaml_in:
+        config_dict = yaml.safe_load(yaml_in)
+        flat_dict = flatten_dict(config_dict)
     if args.use_wandb:
         run = wandb.init(
             # set the wandb project where this run will be logged
             project="test_dino",
-            name=name
+            name=name,
+            dir=run_dir,
             # track hyperparameters and run metadata
-            # config='/'.join((cfg.OUTPUT_DIR,'config.yaml'))
+            config=flat_dict
         )
     else:
         run = None
@@ -141,9 +162,9 @@ if __name__ == "__main__":
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
     args.dist_url = (':').join(url_parts)
-    # args.use_wandb=True
+    args.use_wandb=True
 
-    #   --num-gpus 8\
+    #   --num-gpus 8
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\
     #   OUTPUT_DIR output/exp_city
 
