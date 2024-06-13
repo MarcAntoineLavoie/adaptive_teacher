@@ -26,11 +26,11 @@ class DinoV2VitFeatureExtractor(nn.Module):
     """
     DINO V2 Vision Transformer Feature Extractor.
     """
-    def __init__(self, cfg, cnn_dim, model_name='dinov2_vitb14'):
+    def __init__(self, cfg, cnn_dim, model_name='dinov2_vitb14', normalize_feature=True):
         super(DinoV2VitFeatureExtractor, self).__init__()
         self.preprocessing = dino_preprocessing(cfg.MODEL.PIXEL_MEAN, cfg.MODEL.PIXEL_STD, is_RGB=True)
         self.is_RGB = True
-        self.normalize_feature = True
+        self.normalize_feature = normalize_feature
         dino_v2_models = {
             "dinov2_vits14": (14, 384, dinov2_vits14), # patch_size, output dims, function name to create model
             "dinov2_vitb14": (14, 768, dinov2_vitb14),
@@ -103,13 +103,21 @@ class DinoAlignHead(nn.Module):
         return feat_cnn
     
     def dino_loss(self, feat_cnn, feat_dino, return_sim=False, fg_mask=None):
-        feat_cnn = feat_cnn.permute((0,2,3,1)).unsqueeze(-2)
-        feat_dino = feat_dino.permute((0,2,3,1)).unsqueeze(-1)
-        sim = torch.matmul(feat_cnn, feat_dino)
-        if fg_mask is not None:
-            loss = ((1-sim.squeeze())*fg_mask.to(device=sim.device)).mean()
+        if self.normalize_feature:
+            feat_cnn = feat_cnn.permute((0,2,3,1)).unsqueeze(-2)
+            feat_dino = feat_dino.permute((0,2,3,1)).unsqueeze(-1)
+            sim = torch.matmul(feat_cnn, feat_dino)
+            if fg_mask is not None:
+                loss = ((1-sim.squeeze())*fg_mask.to(device=sim.device)).mean()
+            else:
+                loss = (1-sim).mean()
         else:
-            loss = (1-sim).mean()
+            sim = torch.norm(feat_cnn-feat_dino, dim=1)
+            if fg_mask is not None:
+                loss = (sim*fg_mask.to(device=sim.device)).mean() / 50
+            else:
+                loss = sim.mean() / 50
+
         if return_sim:
             return loss, sim
         else:

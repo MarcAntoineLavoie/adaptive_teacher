@@ -72,10 +72,23 @@ import csv
 # import cv2
 
 from adapteacher.engine.dino_extractor import DinoV2VitFeatureExtractor, DinoAlignHead
-from detectron2.structures.masks import polygons_to_bitmask
+from detectron2.structures.masks import polygons_to_bitmask, BitMasks
 from PIL import Image
 from fvcore.transforms.transform import PadTransform, HFlipTransform
 import wandb
+
+# pedestrian		0,93,192+x
+# rider			0,97,170+x
+# car			0,101,144+x
+# truck			0,105,120+x
+# bus			0,109,96+x
+# train			0,121,24+x
+# motorcycle		0,125,0+x
+# bicycle			0,128,238+x
+
+ACDC_SEG_INSTANCE_LABELS = {'person': [0, [0, 93, 192]], 'rider': [1, [0, 97, 170]], 'car':[2, [0, 101, 144]], 'truck': [3, [0, 105, 102]],
+                            'bus': [4, [0, 109, 96]], 'train': [5, [0, 121, 24]], 'motorcycle': [6, [0, 125, 0]], 'bicycle': [7, [0, 128, 238]]}
+ACDC_PIX2CLASS = {93:0,97:1,101:2,105:3,109:4,121:5,125:6,128:7}
 
 # Supervised-only Trainer
 class BaselineTrainer(DefaultTrainer):
@@ -331,7 +344,7 @@ class ATeacherTrainer(DefaultTrainer):
             self.use_dino = True
             self.cnn_feat = {}
             cnn_dim = [*model.backbone.modules()][-3].num_features
-            model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14').eval()
+            model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             dino_dim = [*model.dino_head.modules()][-2].normalized_shape[0]
             model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature)
             self._register_input_hook(model, 'proposal_generator')
@@ -723,6 +736,7 @@ class ATeacherTrainer(DefaultTrainer):
     # =====================================================
 
     def run_step_full_semisup(self):
+        # self.test_DINO()
         self._trainer.iter = self.iter
         assert self.model.training, "[UBTeacherTrainer] model was changed to eval mode!"
         start = time.perf_counter()
@@ -1279,7 +1293,11 @@ class ATeacherTrainer(DefaultTrainer):
             target_sims = []
             source_masks = []
             target_masks = []
-            for x in range(50):
+            source_instance_feats = []
+            target_instance_feats = []
+            source_names = []
+            target_names = []
+            for x in range(100):
                 if not x % 10:
                     print(x)
                 data = next(self._trainer._data_loader_iter)
@@ -1290,14 +1308,69 @@ class ATeacherTrainer(DefaultTrainer):
                 cnn_feat = self.model.dino_align(self.cnn_feat["supervised"], dino_feat)
                 loss_s, sim_s = self.model.dino_align.dino_loss(cnn_feat, dino_feat, return_sim=True)
                 source_sims.append(sim_s.squeeze().detach().cpu().numpy())
-                source_masks.append(self.get_fg_mask(source_weak))
+                curr_masks = self.get_fg_mask(source_weak)
+                source_names = source_names + [x['file_name'] for x in source_weak]
+                # source_masks.append(curr_masks)
+                for i in range(len(curr_masks)):
+                    for j in range(len(curr_masks[i])):
+                        mask_feat = torch.nn.functional.normalize((dino_feat[i,:,:,:].detach().cpu() * torch.tensor(curr_masks[i][j][2])).sum(1).sum(1), dim=0)
+                        source_instance_feats.append((curr_masks[i][j][0], mask_feat, curr_masks[i][j][2].sum()))
 
                 _, _ = self.model(target_weak, branch="supervised")
                 dino_feat = self.model.dino_head(target_weak)
                 cnn_feat = self.model.dino_align(self.cnn_feat["supervised"], dino_feat)
                 loss_t, sim_t = self.model.dino_align.dino_loss(cnn_feat, dino_feat, return_sim=True)
                 target_sims.append(sim_t.squeeze().detach().cpu().numpy())
-                target_masks.append(self.get_fg_mask(target_weak))
+                curr_masks = self.get_fg_mask(target_weak)
+                target_names = target_names + [x['file_name'] for x in target_weak]
+                # target_masks.append(curr_masks)
+                for i in range(len(curr_masks)):
+                    for j in range(len(curr_masks[i])):
+                        mask_feat = torch.nn.functional.normalize((dino_feat[i,:,:,:].detach().cpu() * torch.tensor(curr_masks[i][j][2])).sum(1).sum(1), dim=0)
+                        target_instance_feats.append((curr_masks[i][j][0], mask_feat, curr_masks[i][j][2].sum()))
+
+            feat_s = [[] for x in range(8)]
+            size_s = [[] for x in range(8)]
+            for i in range(len(source_instance_feats)):
+                id = source_instance_feats[i][0]
+                feat_s[id].append(source_instance_feats[i][1])
+                size_s[id].append(source_instance_feats[i][2])
+            feat_s = [torch.vstack(x) for x in feat_s]
+
+            feat_t = [[] for x in range(8)]
+            size_t = [[] for x in range(8)]
+            for i in range(len(target_instance_feats)):
+                id = target_instance_feats[i][0]
+                feat_t[id].append(target_instance_feats[i][1])
+                size_t[id].append(target_instance_feats[i][2])
+            feat_t = [torch.vstack(x) for x in feat_t]
+            a = 1
+            
+            legend = ['person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcycle', 'bicycle']
+            colors = ['tab:blue','tab:orange','tab:green','tab:red','tab:purple','tab:brown','tab:pink','tab:gray']
+            import matplotlib.pyplot as plt
+            from sklearn.manifold import TSNE
+            feat_all = feat_s + feat_t
+            feat_ = np.concatenate([x.numpy() for x in feat_all])
+            model_ = TSNE(n_components=2,perplexity=5)
+            tsne_data = model_.fit_transform(feat_)
+            plt.figure()
+            x1 = 0
+            for i in range(len(feat_s)):
+                x2 = x1 + len(feat_s[i])
+                data_ = tsne_data[x1:x2,:]
+                x1 = x2
+                plt.plot(data_[:,0],data_[:,1],'.',color=colors[i])
+                plt.legend(legend)
+            
+            for i in range(len(feat_t)):
+                x2 = x1 + len(feat_t[i])
+                data_ = tsne_data[x1:x2,:]
+                x1 = x2
+                plt.plot(data_[:,0],data_[:,1],'x',color=colors[i])
+            plt.title('T-SNE Cityscapes to ACDC Rain')
+            plt.tight_layout()
+            plt.show()
 
         # a = 1
         
@@ -1337,17 +1410,25 @@ class ATeacherTrainer(DefaultTrainer):
                 file_split[3:] = ['gt_panoptic_trainval','gt_panoptic']
                 seg_file = '/'.join(file_split) + '/' + img['segm_file'].rsplit('_',1)[0] + '_panoptic.png'
                 tfs = img['tf_data']
-                seg_things = np.array(Image.open(seg_file))[:,:,1].astype(float)
-                seg_things = np.where(seg_things > 50, 1.0, 0.0)
-                mask = tfs.apply_segmentation(seg_things)
-                mask_small = torch.nn.functional.avg_pool2d(torch.tensor(np.copy(mask)).unsqueeze(0),14).squeeze().numpy() 
-                out.append(mask_small)
+                pixels = np.array(Image.open(seg_file))
+                c, h, w = pixels.shape
+                pixels_flat = np.unique(pixels.reshape(c*h,w), axis=0)
+                pixels_flat = pixels_flat[pixels_flat[:,1]>0,:]
+                mask_class = [ACDC_PIX2CLASS[x[1]] for x in pixels_flat]
+                masks_big = [tfs.apply_segmentation(np.all(pixels==x,axis=2).astype(float)) for x in pixels_flat]
+                masks_small = [torch.nn.functional.avg_pool2d(torch.tensor(np.copy(x)).unsqueeze(0),14).squeeze().numpy() for x in masks_big]
+                masks = [(x,y,z,img['file_name']) for x,y,z in zip(mask_class, masks_big, masks_small)]
+                out.append(masks)
             elif 'gt_masks' in img['instances']._fields.keys():
-                c, h, w = img['image'].shape
-                mask = sum([polygons_to_bitmask(x, h, w) for x in img['instances'].gt_masks.polygons]).astype(bool).astype(float)
-                mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask).unsqueeze(0),14).squeeze().numpy()
-                out.append(mask_small)
-        return np.stack(out)
+                if type(img['instances'].gt_masks) == BitMasks:
+                    masks = [(y.item(),x.float(),torch.nn.functional.avg_pool2d(x.float().unsqueeze(0),14).squeeze().numpy(),img['file_name']) for x,y in zip(img['instances'].gt_masks,img['instances'].gt_classes)] 
+                else:
+                    c, h, w = img['image'].shape
+                    masks = [(y.item(),polygons_to_bitmask(x, h, w).astype(float),torch.nn.functional.avg_pool2d(torch.tensor(polygons_to_bitmask(x, h, w).astype(float)).unsqueeze(0),14).squeeze().numpy(),img['file_name']) for x,y in zip(img['instances'].gt_masks.polygons,img['instances'].gt_classes)] 
+                # mask_fg = sum([polygons_to_bitmask(x, h, w) for x in img['instances'].gt_masks.polygons]).astype(bool).astype(float)
+                # mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask_fg).unsqueeze(0),14).squeeze().numpy()
+                out.append(masks)
+        return out
 
     def get_fg_mask_torch(self, data, noise_regions=None, thresh=0.2, bg_weight=1.0, has_segm=True):
         """
