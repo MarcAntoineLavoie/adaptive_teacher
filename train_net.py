@@ -62,7 +62,9 @@ def setup(args):
     if args.acdc_type is not None:
         cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_{}".format(args.acdc_type))
         cfg.DATASETS.TRAIN_UNLABEL = ("ACDC_train_{}".format(args.acdc_type),)
+    # cfg.DATASETS.TRAIN_UNLABEL = ("cityscapes_foggy_train")
     cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_fog","ACDC_val_night","ACDC_val_rain","ACDC_val_snow")
+    # cfg.INPUT.MIN_SIZE_TRAIN = (800,)
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
@@ -132,7 +134,10 @@ def main(args):
     conf_file='/'.join((cfg.OUTPUT_DIR,'config.yaml'))
     with open(conf_file) as yaml_in:
         config_dict = yaml.safe_load(yaml_in)
-        flat_dict = flatten_dict(config_dict)
+        if conf_file is None:
+            flat_dict = {}
+        else:
+            flat_dict = flatten_dict(config_dict)
     if args.use_wandb:
         run = wandb.init(
             # set the wandb project where this run will be logged
@@ -211,9 +216,7 @@ if __name__ == "__main__":
     # args.output_dir = 'output/dino/dino_tests/test_no_pseudo/'
     # args.output_dir = 'output/dino/dino_tests/test_all_pseudo/'
     # args.output_dir = 'output/dino/dino_tests/test_print6000/'
-    # args.output_dir = 'output/dino/dino_tests/test_debug7000/'
-
-
+    # args.output_dir = 'output/dino/dino_teacher_rate/dino_nom050_EMA0999_v1/'
 
     # args.use_old_cfg = True
     args.use_old_cfg = False

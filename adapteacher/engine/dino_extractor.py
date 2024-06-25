@@ -28,7 +28,11 @@ class DinoV2VitFeatureExtractor(nn.Module):
     """
     def __init__(self, cfg, cnn_dim, model_name='dinov2_vitb14', normalize_feature=True):
         super(DinoV2VitFeatureExtractor, self).__init__()
-        self.preprocessing = dino_preprocessing(cfg.MODEL.PIXEL_MEAN, cfg.MODEL.PIXEL_STD, is_RGB=True)
+        if 'vgg' in cfg.MODEL.BACKBONE:
+            self.preprocessing = dino_preprocessing(cfg.MODEL.PIXEL_MEAN, cfg.MODEL.PIXEL_STD, is_RGB=True)
+        else:
+            pixel_std = [57.375, 57.120, 58.395]
+            self.preprocessing = dino_preprocessing(cfg.MODEL.PIXEL_MEAN, pixel_std, is_RGB=True)
         self.is_RGB = True
         self.normalize_feature = normalize_feature
         dino_v2_models = {
@@ -48,7 +52,7 @@ class DinoV2VitFeatureExtractor(nn.Module):
         assert (
             self.model_name in dino_v2_models.keys()
         ), f"class DinoV2VitFeatureExtractor(nn.Module): is only available for {dino_v2_models.keys()}"
-        path_to_pretrained_weights = os.path.join("adapteacher/engine/dino_weights/dinov2_vitb14_pretrain.pth")
+        path_to_pretrained_weights = "adapteacher/engine/dino_weights/" + model_name + "_pretrain.pth"
         assert (
             os.path.exists(path_to_pretrained_weights)
         ), f"DINO v2 pretrained model path {path_to_pretrained_weights} does not exist!"

@@ -29,7 +29,7 @@ from adapteacher.data.build import (
     build_detection_semisup_train_loader_two_crops,
     build_detection_unlabel_train_loader,
 )
-from adapteacher.data.dataset_mapper import DatasetMapperTwoCropSeparate, DatasetMapperWithWeakAugs, DatasetMapperWithStrongAugs, DatasetMapperTwoCropSeparate_detect
+from adapteacher.data.dataset_mapper import DatasetMapperTwoCropSeparate, DatasetMapperWithWeakAugs, DatasetMapperWithStrongAugs, DatasetMapperTwoCropSeparate_detect, DatasetMapper_test
 from adapteacher.engine.hooks import LossEvalHook
 from adapteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
 from adapteacher.checkpoint.detection_checkpoint import DetectionTSCheckpointer
@@ -76,6 +76,8 @@ from detectron2.structures.masks import polygons_to_bitmask, BitMasks
 from PIL import Image
 from fvcore.transforms.transform import PadTransform, HFlipTransform
 import wandb
+from detectron2.data.dataset_mapper import DatasetMapper
+from math import ceil
 
 # pedestrian		0,93,192+x
 # rider			0,97,170+x
@@ -341,10 +343,12 @@ class ATeacherTrainer(DefaultTrainer):
         model = self.build_model(cfg)
 
         if cfg.SEMISUPNET.USE_DINO:
+            self.branch = "supervised"
             self.use_dino = True
             self.cnn_feat = {}
             cnn_dim = [*model.backbone.modules()][-3].num_features
             model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
+            # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitg14', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             dino_dim = [*model.dino_head.modules()][-2].normalized_shape[0]
             model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature)
             self._register_input_hook(model, 'proposal_generator')
@@ -579,6 +583,7 @@ class ATeacherTrainer(DefaultTrainer):
         return build_lr_scheduler(cfg, optimizer)
 
     def train(self):
+        # self.test_DINO()
         self.train_loop(self.start_iter, self.max_iter)
         if hasattr(self, "_last_eval_results") and comm.is_main_process():
             verify_results(self.cfg, self._last_eval_results)
@@ -736,7 +741,6 @@ class ATeacherTrainer(DefaultTrainer):
     # =====================================================
 
     def run_step_full_semisup(self):
-        # self.test_DINO()
         self._trainer.iter = self.iter
         assert self.model.training, "[UBTeacherTrainer] model was changed to eval mode!"
         start = time.perf_counter()
@@ -1287,47 +1291,147 @@ class ATeacherTrainer(DefaultTrainer):
     def test_DINO(self):
         self.model = self.model.eval()
         self.branch = "supervised"
-        thresh = 0.20
+        n_imgs = 100
+
+        test_loaders = []
+        for dataset_name in self.cfg.DATASETS.TEST:
+            test_loaders.append(iter(build_detection_test_loader(self.cfg, dataset_name, mapper=DatasetMapper_test(self.cfg, True))))
+        n_datasets = len(test_loaders)
+
+        mask_first = True
+        use_bbox = False
         with torch.no_grad():
-            source_sims = []
-            target_sims = []
-            source_masks = []
-            target_masks = []
-            source_instance_feats = []
-            target_instance_feats = []
-            source_names = []
-            target_names = []
-            for x in range(100):
-                if not x % 10:
-                    print(x)
-                data = next(self._trainer._data_loader_iter)
-                source_strong, source_weak, rs1, target_strong, target_weak, sr2 = data
+            instance_feats = []
+            instance_class = []
+            instance_area = []
+            instance_dataset = []
+            instance_city = []
+            instance_file = []
+            instances_per_dataset = []
+            # for lv1 in range(n_imgs):
+            #     if not lv1 % 10:
+            #         print(lv1)
+            n_instances = 0
+            for lv2 in range(n_datasets):
+                print(self.cfg.DATASETS.TEST[lv2])
+                for idx, data in enumerate(test_loaders[lv2]):
+                    if idx > n_imgs:
+                        break
+                    if not len(data[0]['instances']):
+                        continue
+                    if mask_first:
+                        curr_masks = self.get_fg_mask(data)[0]
+                        new_data = [{'image':(data[0]['image']*x[1]).long()} for x in curr_masks]
+                        n_masks = len(new_data)
+                        n_max = 3
+                        if n_masks > n_max:
+                            curr_feats = []
+                            n_batch = ceil(n_masks/n_max)
+                            for i in range(n_batch):
+                                id1 = i*n_max
+                                id2 = id1 + n_max
+                                dino_feat = self.model.dino_head(new_data[id1:id2])
+                                masks_temp = curr_masks[id1:id2]
+                                curr_feats += [(dino_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(masks_temp)]
+                        else:
+                            dino_feat = self.model.dino_head(new_data)
+                            curr_feats = [(dino_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(curr_masks)]
+                    else:
+                        dino_feat = self.model.dino_head(data)
+                        curr_masks = self.get_fg_mask(data)[0]
+                        curr_feats = [(dino_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
+                    # feats = self.model([data], branch="supervised", backbone_only=True)
+                    # cnn_feat = self.model.dino_align(feats['vgg4'], dino_feat)
+                    # loss_, sim_ = self.model.dino_align.dino_loss(cnn_feat, dino_feat, return_sim=True)
+                    # source_sims.append(sim_s.squeeze().detach().cpu().numpy())
+                    # if any([np.linalg.norm(x) < 0.000001 for x in curr_feats]):
+                    #     a=1
+                    curr_feats = [x/np.linalg.norm(x) for x in curr_feats]
+                    instance_feats += curr_feats
+                    instance_class += [x[0] for x in curr_masks]
+                    instance_area += [x[2].sum() for x in curr_masks]
+                    instance_dataset += [self.cfg.DATASETS.TEST[lv2] for x in curr_masks]
+                    instance_file += [data[0]['file_name'] for x in curr_masks]
+                    if 'cityscapes' in data[0]['file_name']:
+                        city = data[0]['file_name'].split('/')[-2]
+                        instance_city += [city for x in curr_masks]
+                    else:
+                        instance_city += ['' for x in curr_masks]
+                instances_per_dataset.append(len(instance_area)-n_instances)
+                n_instances = len(instance_area)
+        
+            instance_feats = np.array(instance_feats)
+            instance_dataset = np.array(instance_dataset)
+            instance_class = np.array(instance_class)
+            permutations = [(x,y) for x in self.cfg.DATASETS.TEST for y in range(8)]
+            ids = [np.where((instance_dataset==x[0]) * (instance_class==x[1]))[0] for x in permutations]
+            datasets = self.cfg.DATASETS.TEST
+            classes = ['person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcycle', 'bicycle']
+            colors = ['tab:blue','tab:orange','tab:green','tab:red','tab:purple','tab:brown','tab:pink','tab:gray']
+            shapes = ['.','x','+','^','v']
+            legend =  [x + ' ' + y for x in datasets for y in classes]
 
-                _, _ = self.model(source_weak, branch="supervised")
-                dino_feat = self.model.dino_head(source_weak)
-                cnn_feat = self.model.dino_align(self.cnn_feat["supervised"], dino_feat)
-                loss_s, sim_s = self.model.dino_align.dino_loss(cnn_feat, dino_feat, return_sim=True)
-                source_sims.append(sim_s.squeeze().detach().cpu().numpy())
-                curr_masks = self.get_fg_mask(source_weak)
-                source_names = source_names + [x['file_name'] for x in source_weak]
-                # source_masks.append(curr_masks)
-                for i in range(len(curr_masks)):
-                    for j in range(len(curr_masks[i])):
-                        mask_feat = torch.nn.functional.normalize((dino_feat[i,:,:,:].detach().cpu() * torch.tensor(curr_masks[i][j][2])).sum(1).sum(1), dim=0)
-                        source_instance_feats.append((curr_masks[i][j][0], mask_feat, curr_masks[i][j][2].sum()))
 
-                _, _ = self.model(target_weak, branch="supervised")
-                dino_feat = self.model.dino_head(target_weak)
-                cnn_feat = self.model.dino_align(self.cnn_feat["supervised"], dino_feat)
-                loss_t, sim_t = self.model.dino_align.dino_loss(cnn_feat, dino_feat, return_sim=True)
-                target_sims.append(sim_t.squeeze().detach().cpu().numpy())
-                curr_masks = self.get_fg_mask(target_weak)
-                target_names = target_names + [x['file_name'] for x in target_weak]
-                # target_masks.append(curr_masks)
-                for i in range(len(curr_masks)):
-                    for j in range(len(curr_masks[i])):
-                        mask_feat = torch.nn.functional.normalize((dino_feat[i,:,:,:].detach().cpu() * torch.tensor(curr_masks[i][j][2])).sum(1).sum(1), dim=0)
-                        target_instance_feats.append((curr_masks[i][j][0], mask_feat, curr_masks[i][j][2].sum()))
+            offset = instances_per_dataset[0]
+            sim_mat = np.matmul(instance_feats,instance_feats.T)
+            k = 5
+            k_NN = np.argpartition(sim_mat[:,:offset],-k)[:,-k:]
+            k_NN_ = np.take_along_axis(k_NN, np.argsort(np.take_along_axis(sim_mat[:,:offset], k_NN, axis=1), axis=1), axis=1)
+            n = len(instance_feats)
+            confusions_acdc2city = []
+            acdc_ids = np.core.defchararray.find(instance_dataset,'ACDC')!=-1
+            k_closest_class = instance_class[k_NN_]
+            for i in range(8):
+                ids_acdc_class = (instance_class==i)*acdc_ids
+                k_closest_single = k_closest_class[ids_acdc_class,:].flatten()
+                confusions_acdc2city.append(np.array([(k_closest_single==x).sum() for x in range(8)])/len(k_closest_single))
+
+
+            import matplotlib.pyplot as plt
+            from sklearn.manifold import TSNE
+            offset = 0
+            model_ = TSNE(n_components=2)
+            tsne_data = model_.fit_transform(instance_feats[offset:,:])
+            plt.figure()
+            lv3 = -1
+            n0 = 8*lv3+8
+            for i in range(n0,len(legend)):
+                perm = permutations[i]
+                if perm[1] == 0:
+                    lv3 += 1
+                ids_curr = ids[i]-offset
+                plt.plot(tsne_data[ids_curr,0],tsne_data[ids_curr,1],linestyle='none',marker=shapes[lv3],color=colors[perm[1]])
+            
+            plt.legend(legend)
+            plt.show()
+            a=1
+                # source_strong, source_weak, rs1, target_strong, target_weak, sr2 = data
+
+                # _, _ = self.model(source_weak, branch="supervised")
+                # dino_feat = self.model.dino_head(source_weak)
+                # cnn_feat = self.model.dino_align(self.cnn_feat["supervised"], dino_feat)
+                # loss_s, sim_s = self.model.dino_align.dino_loss(cnn_feat, dino_feat, return_sim=True)
+                # source_sims.append(sim_s.squeeze().detach().cpu().numpy())
+                # curr_masks = self.get_fg_mask(source_weak)
+                # source_names = source_names + [x['file_name'] for x in source_weak]
+                # # source_masks.append(curr_masks)
+                # for i in range(len(curr_masks)):
+                #     for j in range(len(curr_masks[i])):
+                #         mask_feat = torch.nn.functional.normalize((dino_feat[i,:,:,:].detach().cpu() * torch.tensor(curr_masks[i][j][2])).sum(1).sum(1), dim=0)
+                #         source_instance_feats.append((curr_masks[i][j][0], mask_feat, curr_masks[i][j][2].sum()))
+
+                # _, _ = self.model(target_weak, branch="supervised")
+                # dino_feat = self.model.dino_head(target_weak)
+                # cnn_feat = self.model.dino_align(self.cnn_feat["supervised"], dino_feat)
+                # loss_t, sim_t = self.model.dino_align.dino_loss(cnn_feat, dino_feat, return_sim=True)
+                # target_sims.append(sim_t.squeeze().detach().cpu().numpy())
+                # curr_masks = self.get_fg_mask(target_weak)
+                # target_names = target_names + [x['file_name'] for x in target_weak]
+                # # target_masks.append(curr_masks)
+                # for i in range(len(curr_masks)):
+                #     for j in range(len(curr_masks[i])):
+                #         mask_feat = torch.nn.functional.normalize((dino_feat[i,:,:,:].detach().cpu() * torch.tensor(curr_masks[i][j][2])).sum(1).sum(1), dim=0)
+                #         target_instance_feats.append((curr_masks[i][j][0], mask_feat, curr_masks[i][j][2].sum()))
 
             feat_s = [[] for x in range(8)]
             size_s = [[] for x in range(8)]
@@ -1411,13 +1515,14 @@ class ATeacherTrainer(DefaultTrainer):
                 seg_file = '/'.join(file_split) + '/' + img['segm_file'].rsplit('_',1)[0] + '_panoptic.png'
                 tfs = img['tf_data']
                 pixels = np.array(Image.open(seg_file))
-                c, h, w = pixels.shape
-                pixels_flat = np.unique(pixels.reshape(c*h,w), axis=0)
+                h, w, c = pixels.shape
+                pixels_flat = np.unique(pixels.reshape(h*w,c), axis=0)
                 pixels_flat = pixels_flat[pixels_flat[:,1]>0,:]
                 mask_class = [ACDC_PIX2CLASS[x[1]] for x in pixels_flat]
                 masks_big = [tfs.apply_segmentation(np.all(pixels==x,axis=2).astype(float)) for x in pixels_flat]
                 masks_small = [torch.nn.functional.avg_pool2d(torch.tensor(np.copy(x)).unsqueeze(0),14).squeeze().numpy() for x in masks_big]
                 masks = [(x,y,z,img['file_name']) for x,y,z in zip(mask_class, masks_big, masks_small)]
+                masks = [x for x in masks if x[1].sum()>25]
                 out.append(masks)
             elif 'gt_masks' in img['instances']._fields.keys():
                 if type(img['instances'].gt_masks) == BitMasks:
@@ -1428,6 +1533,9 @@ class ATeacherTrainer(DefaultTrainer):
                 # mask_fg = sum([polygons_to_bitmask(x, h, w) for x in img['instances'].gt_masks.polygons]).astype(bool).astype(float)
                 # mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask_fg).unsqueeze(0),14).squeeze().numpy()
                 out.append(masks)
+            # elif 'segmentation' in img['instnaces']._fields.keys():
+
+
         return out
 
     def get_fg_mask_torch(self, data, noise_regions=None, thresh=0.2, bg_weight=1.0, has_segm=True):
@@ -2556,3 +2664,94 @@ def temp_run():
             print(name, module.weight.sum().item())
         elif module_type == torch.nn.modules.batchnorm.BatchNorm2d:
             print(name, module.running_mean.sum().item())
+
+def test_object_coloring():
+    import matplotlib.pyplot as plt
+    import pickle
+    from segment_anything import sam_model_registry, SamPredictor
+    
+
+    self.model = self.model.eval()
+    self.branch = "supervised"
+    n_imgs = 100
+
+    test_loaders = []
+    for dataset_name in self.cfg.DATASETS.TEST:
+        print(dataset_name)
+        test_loaders.append(iter(build_detection_test_loader(self.cfg, dataset_name, mapper=DatasetMapper_test(self.cfg, True))))
+    
+    file_in = 'dino_feats_nom.pkl'
+    with open(file_in, 'rb') as f_in:
+        data = pickle.load(f_in)
+
+    prototypes = np.zeros((len(test_loaders),8,data['instance_feats'].shape[1]))
+    for lv1 in range(len(test_loaders)):
+        for lv2 in range(8):
+            ids = np.where((data['instance_dataset'] == self.cfg.DATASETS.TEST[lv1]) * (data['instance_class'] == lv2))[0]
+            prototype = np.sum(data['instance_feats'][ids,:],axis=0)
+            prototypes[lv1,lv2,:] = prototype / np.linalg.norm(prototype)
+
+    proto_flat = np.swapaxes(prototypes,0,1).reshape(40,-1)
+    sims_proto = np.matmul(proto_flat,proto_flat.T)
+     
+    img_data = next(test_loaders[1])
+    img_ = img_data[0]['image'].detach().cpu().transpose(0,1).transpose(1,2).numpy()[:,:,[2,1,0]]
+    img_dino = self.model.dino_head(img_data).squeeze(0).detach().cpu().numpy()
+    c,h,w = img_dino.shape
+    # sims = img_dino * prototypes[1,2,:][:,np.newaxis,np.newaxis]
+    sims_new = np.matmul(prototypes[1,6,:][np.newaxis,:],img_dino.reshape(768,h*w)).reshape(1,h,w).squeeze()
+    sims_old = np.matmul(prototypes[0,6,:][np.newaxis,:],img_dino.reshape(768,h*w)).reshape(1,h,w).squeeze()
+
+    data_id = 0
+    dataset_names = self.cfg.DATASETS.TEST[data_id]
+    class_num = 2
+    ids = np.where((np.isin(data['instance_dataset'], dataset_names)) * (data['instance_class'] == class_num))[0]
+    test = data['instance_feats'][ids,:]
+    sim_mat = np.matmul(test,test.T) - np.eye(test.shape[0])
+
+    # plt.figure();plt.hist(sim_mat.flatten(),bins=np.arange(-0.1,1.1,0.1))
+    sim_mat2 = np.matmul(test,prototypes[data_id,class_num,:][:,np.newaxis])
+    sim_mat3 = np.matmul(test,prototypes[0,class_num,:][:,np.newaxis])
+
+    from detectron2.utils.visualizer import Visualizer
+
+    img_temp = img_data[0]['image'].detach().cpu().transpose(0,1).transpose(1,2)[:,:,[2,1,0]]
+    images = self.model.preprocess_image(img_data)
+    features = self.model.backbone(images.tensor)
+
+
+    proposals, losses, pred_objectness_logits, keeps, proposal_idx, proposals_old = self.model.proposal_generator(
+        images, features, orig_proposals=True
+    )
+
+
+    test_v = Visualizer(img_temp)
+    temp = proposals[0][:20].proposal_boxes.tensor.detach().cpu()
+    test_v.overlay_instances(boxes=temp, labels=range(20))
+    img2 = test_v.get_output().get_image()
+
+
+    file_in2 = 'dino_feats_mask_first.pkl'
+    with open(file_in2, 'rb') as f_in:
+        data_mask = pickle.load(f_in)
+
+    # # roi_head lower branch
+    # _, detector_losses = self.roi_heads(
+    #     images,
+    #     features,
+    #     proposals_rpn,
+    #     compute_loss=True,
+    #     targets=gt_instances,
+    #     branch=branch,
+    # ))
+
+    
+
+# pedestrian		0,93,192+x
+# rider			0,97,170+x
+# car			0,101,144+x
+# truck			0,105,120+x
+# bus			0,109,96+x
+# train			0,121,24+x
+# motorcycle		0,125,0+x
+# bicycle			0,128,238+x

@@ -332,6 +332,131 @@ class DatasetMapperTwoCropSeparate_detect(DatasetMapper):
         assert dataset_dict["image"].size(2) == dataset_dict_key["image"].size(2)
         return (dataset_dict, dataset_dict_key, regions)
 
+class DatasetMapper_test(DatasetMapper):
+    """
+    This customized mapper produces two augmented images from a single image
+    instance. This mapper makes sure that the two augmented images have the same
+    cropping and thus the same size.
+
+    A callable which takes a dataset dict in Detectron2 Dataset format,
+    and map it into a format used by the model.
+
+    This is the default callable to be used to map your dataset dict into training data.
+    You may need to follow it to implement your own one for customized logic,
+    such as a different way to read or transform images.
+    See :doc:`/tutorials/data_loading` for details.
+
+    The callable currently does the following:
+
+    1. Read the image from "file_name"
+    2. Applies cropping/geometric transforms to the image and annotations
+    3. Prepare data and annotations to Tensor and :class:`Instances`
+    """
+
+    def __init__(self, cfg, is_train=True, keep_tf_data=True):
+        self.augmentation = new_augs(cfg, is_train)
+        # include crop into self.augmentation
+        if cfg.INPUT.CROP.ENABLED and False:
+            if cfg.INPUT.PAD_CROP:
+                self.augmentation.insert(
+                    0, RandomCropAndPad(cfg.INPUT.CROP.TYPE, cfg.INPUT.CROP.SIZE)
+                )
+            else:
+                self.augmentation.insert(
+                    0, T.RandomCrop(cfg.INPUT.CROP.TYPE, cfg.INPUT.CROP.SIZE)
+                )
+            logging.getLogger(__name__).info(
+                "Cropping used in training: " + str(self.augmentation[0])
+            )
+            self.compute_tight_boxes = True
+        else:
+            self.compute_tight_boxes = False
+
+        # fmt: off
+        self.img_format = cfg.INPUT.FORMAT
+        self.mask_on = cfg.MODEL.MASK_ON
+        self.mask_format = cfg.INPUT.MASK_FORMAT
+        self.keypoint_on = cfg.MODEL.KEYPOINT_ON
+
+        self.is_train = is_train
+        self.keep_tf_data = keep_tf_data
+
+    def __call__(self, dataset_dict):
+        """
+        Args:
+            dataset_dict (dict): Metadata of one image, in Detectron2 Dataset format.
+
+        Returns:
+            dict: a format that builtin models in detectron2 accept
+        """
+        dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
+        image = utils.read_image(dataset_dict["file_name"], format=self.img_format)
+        # utils.check_image_size(dataset_dict, image)
+
+        if "sem_seg_file_name" in dataset_dict:
+            sem_seg_gt = utils.read_image(
+                dataset_dict.pop("sem_seg_file_name"), "L"
+            ).squeeze(2)
+        else:
+            sem_seg_gt = None
+
+        aug_input = T.StandardAugInput(image, sem_seg=sem_seg_gt)
+        transforms = aug_input.apply_augmentations(self.augmentation)
+        image_weak_aug, sem_seg_gt = aug_input.image, aug_input.sem_seg
+        image_shape = image_weak_aug.shape[:2]  # h, w
+
+        if 'foggy' in dataset_dict['file_name']:
+            mask_format = "bitmask"
+        elif 'cityscapes' in dataset_dict['file_name']:
+            mask_format = "bitmask"
+        else:
+            mask_format = self.mask_format
+
+        if sem_seg_gt is not None:
+            dataset_dict["sem_seg"] = torch.as_tensor(sem_seg_gt.astype("long"))
+
+
+        if "annotations" in dataset_dict:
+            for anno in dataset_dict["annotations"]:
+                # if not self.mask_on:
+                #     anno.pop("segmentation", None)
+                if not self.keypoint_on:
+                    anno.pop("keypoints", None)
+
+            annos = [
+                utils.transform_instance_annotations(
+                    obj,
+                    transforms,
+                    image_shape,
+                    keypoint_hflip_indices=None,
+                )
+                for obj in dataset_dict.pop("annotations")
+                if obj.get("iscrowd", 0) == 0
+            ]
+            if len(annos):
+                if 'segmentation' in annos[0].keys() and mask_format == "polygon":
+                    for lv1 in range(len(annos)):
+                        # annos[lv1]['segmentation'] = [annos[lv1]['segmentation'][0].reshape(-1,2)]
+                        annos[lv1]['segmentation'] = [x.tolist() for x in annos[lv1]['segmentation']]
+            instances = utils.annotations_to_instances(
+                annos, image_shape, mask_format=mask_format
+            )
+
+            if self.compute_tight_boxes and instances.has("gt_masks"):
+                instances.gt_boxes = instances.gt_masks.get_bounding_boxes()
+
+            bboxes_d2_format = utils.filter_empty_instances(instances)
+            dataset_dict["instances"] = bboxes_d2_format
+
+        if self.keep_tf_data:
+            dataset_dict['tf_data'] = transforms
+
+        dataset_dict["image"] = torch.as_tensor(
+            np.ascontiguousarray(image_weak_aug.transpose(2, 0, 1))
+        )
+        
+        return dataset_dict
+
 class DatasetMapperWithWeakAugs(DatasetMapper):
     """
     This customized mapper produces two augmented images from a single image
