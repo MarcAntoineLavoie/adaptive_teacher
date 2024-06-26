@@ -170,7 +170,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         return images, images_t
 
     def forward(
-        self, batched_inputs, branch="supervised", given_proposals=None, val_mode=False
+        self, batched_inputs, branch="supervised", given_proposals=None, val_mode=False, backbone_only=False,
     ):
         """
         Args:
@@ -196,7 +196,11 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         """
         if self.D_img == None:
             self.build_discriminator()
-        if (not self.training) and (not val_mode):  # only conduct when testing mode
+        if backbone_only:
+            images = self.preprocess_image(batched_inputs)
+            features = self.backbone(images.tensor)
+            return features
+        elif (not self.training) and (not val_mode):  # only conduct when testing mode
             return self.inference(batched_inputs)
 
         source_label = 0
@@ -245,6 +249,8 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             gt_instances = None
 
         features = self.backbone(images.tensor)
+        if self.dis_type == 'res4':
+            features = {key: features[key]/1000 for key in features.keys()}
 
         # TODO: remove the usage of if else here. This needs to be re-organized
         if branch == "supervised":
