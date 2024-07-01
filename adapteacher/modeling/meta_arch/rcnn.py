@@ -249,8 +249,8 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             gt_instances = None
 
         features = self.backbone(images.tensor)
-        if self.dis_type == 'res4':
-            features = {key: features[key]/1000 for key in features.keys()}
+        # if self.dis_type == 'res4':
+        #     features = {key: features[key]/1000 for key in features.keys()}
 
         # TODO: remove the usage of if else here. This needs to be re-organized
         if branch == "supervised":

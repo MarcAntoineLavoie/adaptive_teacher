@@ -78,6 +78,7 @@ from fvcore.transforms.transform import PadTransform, HFlipTransform
 import wandb
 from detectron2.data.dataset_mapper import DatasetMapper
 from math import ceil
+import pickle
 
 # pedestrian		0,93,192+x
 # rider			0,97,170+x
@@ -346,12 +347,14 @@ class ATeacherTrainer(DefaultTrainer):
             self.branch = "supervised"
             self.use_dino = True
             self.cnn_feat = {}
-            if "vgg" in cfg.MODEL.BACKBONE:
+            if "vgg" in cfg.MODEL.BACKBONE.NAME:
                 cnn_dim = [*model.backbone.modules()][-3].num_features
             else:
                 cnn_dim = [*model.backbone.modules()][-1].num_features
             model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitg14', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
+            # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb16', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
+            # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb8', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             dino_dim = [*model.dino_head.modules()][-2].normalized_shape[0]
             model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature)
             self._register_input_hook(model, 'proposal_generator')
@@ -536,6 +539,8 @@ class ATeacherTrainer(DefaultTrainer):
         checkpoint = self.checkpointer.resume_or_load(
             self.cfg.MODEL.WEIGHTS, resume=resume
         )
+        # if self.model.dis_type == 'res4':
+        #     self.model.backbone.stem.weight /= 1000
         if resume and self.checkpointer.has_checkpoint():
             self.start_iter = checkpoint.get("iteration", -1) + 1
             # The checkpoint stores the training iteration that just finished, thus we start
@@ -1323,10 +1328,10 @@ class ATeacherTrainer(DefaultTrainer):
                     if not len(data[0]['instances']):
                         continue
                     if mask_first:
-                        curr_masks = self.get_fg_mask(data)[0]
+                        curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size)[0]
                         new_data = [{'image':(data[0]['image']*x[1]).long()} for x in curr_masks]
                         n_masks = len(new_data)
-                        n_max = 3
+                        n_max = 2
                         if n_masks > n_max:
                             curr_feats = []
                             n_batch = ceil(n_masks/n_max)
@@ -1341,7 +1346,7 @@ class ATeacherTrainer(DefaultTrainer):
                             curr_feats = [(dino_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(curr_masks)]
                     else:
                         dino_feat = self.model.dino_head(data)
-                        curr_masks = self.get_fg_mask(data)[0]
+                        curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size)[0]
                         curr_feats = [(dino_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
                     # feats = self.model([data], branch="supervised", backbone_only=True)
                     # cnn_feat = self.model.dino_align(feats['vgg4'], dino_feat)
@@ -1366,6 +1371,12 @@ class ATeacherTrainer(DefaultTrainer):
             instance_feats = np.array(instance_feats)
             instance_dataset = np.array(instance_dataset)
             instance_class = np.array(instance_class)
+            data_dict = {'instance_feats':instance_feats, 'instance_class':instance_class, 'instance_area':instance_area, 'instance_dataset':instance_dataset,
+                         'instance_city':instance_city, 'instance_file':instance_file, 'instances_per_dataset':instances_per_dataset}
+            file_out = 'dinov1_feats_patch8_mask.pkl'
+            with open(file_out, 'wb') as f_out:
+                pickle.dump(data_dict, f_out)
+
             permutations = [(x,y) for x in self.cfg.DATASETS.TEST for y in range(8)]
             ids = [np.where((instance_dataset==x[0]) * (instance_class==x[1]))[0] for x in permutations]
             datasets = self.cfg.DATASETS.TEST
@@ -1509,7 +1520,7 @@ class ATeacherTrainer(DefaultTrainer):
         plt.title('Angle Distribution, weight=0.1, 40k iter.')
         plt.show()
 
-    def get_fg_mask(self, data):
+    def get_fg_mask(self, data, patch_size=14):
         out = []
         for img in data:
             if 'segm_file' in img.keys():
@@ -1523,18 +1534,18 @@ class ATeacherTrainer(DefaultTrainer):
                 pixels_flat = pixels_flat[pixels_flat[:,1]>0,:]
                 mask_class = [ACDC_PIX2CLASS[x[1]] for x in pixels_flat]
                 masks_big = [tfs.apply_segmentation(np.all(pixels==x,axis=2).astype(float)) for x in pixels_flat]
-                masks_small = [torch.nn.functional.avg_pool2d(torch.tensor(np.copy(x)).unsqueeze(0),14).squeeze().numpy() for x in masks_big]
+                masks_small = [torch.nn.functional.avg_pool2d(torch.tensor(np.copy(x)).unsqueeze(0),patch_size).squeeze().numpy() for x in masks_big]
                 masks = [(x,y,z,img['file_name']) for x,y,z in zip(mask_class, masks_big, masks_small)]
                 masks = [x for x in masks if x[1].sum()>25]
                 out.append(masks)
             elif 'gt_masks' in img['instances']._fields.keys():
                 if type(img['instances'].gt_masks) == BitMasks:
-                    masks = [(y.item(),x.float(),torch.nn.functional.avg_pool2d(x.float().unsqueeze(0),14).squeeze().numpy(),img['file_name']) for x,y in zip(img['instances'].gt_masks,img['instances'].gt_classes)] 
+                    masks = [(y.item(),x.float(),torch.nn.functional.avg_pool2d(x.float().unsqueeze(0),patch_size).squeeze().numpy(),img['file_name']) for x,y in zip(img['instances'].gt_masks,img['instances'].gt_classes)] 
                 else:
                     c, h, w = img['image'].shape
                     masks = [(y.item(),polygons_to_bitmask(x, h, w).astype(float),torch.nn.functional.avg_pool2d(torch.tensor(polygons_to_bitmask(x, h, w).astype(float)).unsqueeze(0),14).squeeze().numpy(),img['file_name']) for x,y in zip(img['instances'].gt_masks.polygons,img['instances'].gt_classes)] 
                 # mask_fg = sum([polygons_to_bitmask(x, h, w) for x in img['instances'].gt_masks.polygons]).astype(bool).astype(float)
-                # mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask_fg).unsqueeze(0),14).squeeze().numpy()
+                # mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask_fg).unsqueeze(0),patch_size).squeeze().numpy()
                 out.append(masks)
             # elif 'segmentation' in img['instnaces']._fields.keys():
 
@@ -2683,11 +2694,9 @@ def test_object_coloring():
         print(dataset_name)
         test_loaders.append(iter(build_detection_test_loader(self.cfg, dataset_name, mapper=DatasetMapper_test(self.cfg, True))))
     
-    file_in = 'dino_feats_nom.pkl'
-    with open(file_in, 'rb') as f_in:
-        data = pickle.load(f_in)
 
-    prototypes = np.zeros((len(test_loaders),8,data['instance_feats'].shape[1]))
+
+    prototypes = np.zeros((5,8,data['instance_feats'].shape[1]))
     for lv1 in range(len(test_loaders)):
         for lv2 in range(8):
             ids = np.where((data['instance_dataset'] == self.cfg.DATASETS.TEST[lv1]) * (data['instance_class'] == lv2))[0]
@@ -2716,27 +2725,64 @@ def test_object_coloring():
     sim_mat2 = np.matmul(test,prototypes[data_id,class_num,:][:,np.newaxis])
     sim_mat3 = np.matmul(test,prototypes[0,class_num,:][:,np.newaxis])
 
+
+
+
     from detectron2.utils.visualizer import Visualizer
+    img_data = next(test_loaders[1])
 
     img_temp = img_data[0]['image'].detach().cpu().transpose(0,1).transpose(1,2)[:,:,[2,1,0]]
     images = self.model.preprocess_image(img_data)
     features = self.model.backbone(images.tensor)
+    features_ = [features['vgg4']]
+    pred_objectness_logits, pred_anchor_deltas = self.model.proposal_generator.rpn_head(features_)
+    anchors = self.model.proposal_generator.anchor_generator(features_)
 
-
-    proposals, losses, pred_objectness_logits, keeps, proposal_idx, proposals_old = self.model.proposal_generator(
-        images, features, orig_proposals=True
+    pred_objectness_logits = [
+        # (N, A, Hi, Wi) -> (N, Hi, Wi, A) -> (N, Hi*Wi*A)
+        score.permute(0, 2, 3, 1).flatten(1)
+        for score in pred_objectness_logits
+    ]
+    pred_anchor_deltas = [
+        # (N, A*B, Hi, Wi) -> (N, A, B, Hi, Wi) -> (N, Hi, Wi, A, B) -> (N, Hi*Wi*A, B)
+        x.view(
+            x.shape[0], -1, self.model.proposal_generator.anchor_generator.box_dim, x.shape[-2], x.shape[-1]
+        )
+        .permute(0, 3, 4, 1, 2)
+        .flatten(1, -2)
+        for x in pred_anchor_deltas
+    ]
+    proposals, keeps, proposal_idx, proposals_old = self.model.proposal_generator.predict_proposals(
+        anchors, pred_objectness_logits, pred_anchor_deltas, images.image_sizes
     )
+    deltas = (proposals_old[0].squeeze() - anchors[0].tensor).detach().cpu()
+    sorted_ids = deltas[final_ids[:20],:].sum(dim=1).abs().argsort()
+    final_ids = proposal_idx[0][0,keeps[0]].detach().cpu()
+
+    test = proposals_old[0].squeeze().reshape(17,30,15,4)
+    temp = test[8,3,:,:].detach().cpu()
 
 
     test_v = Visualizer(img_temp)
-    temp = proposals[0][:20].proposal_boxes.tensor.detach().cpu()
-    test_v.overlay_instances(boxes=temp, labels=range(20))
+    temp = proposals[0][sorted_ids[:12]].proposal_boxes.tensor.detach().cpu()
+    test_v.overlay_instances(boxes=temp, labels=range(temp.shape[0]))
     img2 = test_v.get_output().get_image()
 
+    proposals_roih, ROI_predictions = self.model.roi_heads(
+        images,
+        features,
+        proposals,
+        targets=None,
+        compute_loss=False,
+        branch="unsup_data_weak",
+    )
 
-    file_in2 = 'dino_feats_mask_first.pkl'
-    with open(file_in2, 'rb') as f_in:
-        data_mask = pickle.load(f_in)
+    temp2 = proposals_roih[0].pred_boxes.tensor.detach().cpu()
+    test_v = Visualizer(img_temp)
+    test_v.overlay_instances(boxes=temp2, labels=range(temp2.shape[0]))
+    img3 = test_v.get_output().get_image()
+
+
 
     # # roi_head lower branch
     # _, detector_losses = self.roi_heads(
