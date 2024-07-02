@@ -145,7 +145,7 @@ def main(args):
     else:
         run_id = os.urandom(4).hex()
         with open(run_id_file, "w") as text_file:
-            print(run.id, file=text_file)
+            print(run_id, file=text_file)
     if args.use_wandb:
         run = wandb.init(
             # set the wandb project where this run will be logged
