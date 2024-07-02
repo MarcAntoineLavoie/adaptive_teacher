@@ -138,12 +138,22 @@ def main(args):
             flat_dict = {}
         else:
             flat_dict = flatten_dict(config_dict)
+    run_id_file = '/'.join((cfg.OUTPUT_DIR,'run_id.txt'))
+    if os.path.isfile(run_id_file):
+        with open(run_id_file, "r") as text_file:
+            run_id = text_file.read().rstrip()
+    else:
+        run_id = os.urandom(4).hex()
+        with open(run_id_file, "w") as text_file:
+            print(run.id, file=text_file)
     if args.use_wandb:
         run = wandb.init(
             # set the wandb project where this run will be logged
             project="test_dino",
             name=name,
             dir=run_dir,
+            id=run_id,
+            resume="allow",
             # track hyperparameters and run metadata
             config=flat_dict
         )
@@ -179,6 +189,7 @@ if __name__ == "__main__":
     # args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_test.yaml'
     # args.config_file = './configs/faster_rcnn_R101_cross_clipart_v2.yaml'
+    # args.config_file = './configs/faster_rcnn_RES_cross_city_tiny.yaml'
     # args.resume = False
     args.resume = True
 
