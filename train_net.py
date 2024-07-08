@@ -153,7 +153,7 @@ def main(args):
             name=name,
             dir=run_dir,
             id=run_id,
-            resume="allow",
+            resume="must",
             # track hyperparameters and run metadata
             config=flat_dict
         )
