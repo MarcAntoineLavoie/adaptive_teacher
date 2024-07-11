@@ -35,39 +35,51 @@ class DinoV2VitFeatureExtractor(nn.Module):
             self.preprocessing = dino_preprocessing(cfg.MODEL.PIXEL_MEAN, pixel_std, is_RGB=True)
         self.is_RGB = True
         self.normalize_feature = normalize_feature
-        dino_v2_models = {
-            "dinov2_vits14": (14, 384, dinov2_vits14), # patch_size, output dims, function name to create model
-            "dinov2_vitb14": (14, 768, dinov2_vitb14),
-            "dinov2_vitl14": (14, 1024, dinov2_vitl14),
-            "dinov2_vitg14": (14, 1536, dinov2_vitg14),
-        }
-        # model name to model weights
-        name_to_weights = {"dinov2_vits14": "dinov2_vits14_pretrain.pth",
-                           "dinov2_vitb14": "dinov2_vitb14_pretrain.pth",
-                           "dinov2_vitl14": "dinov2_vitl14_pretrain.pth",
-                           "dinov2_vitg14": "dinov2_vitg14_pretrain.pth"
-        }
-        # load model on cpu
-        self.model_name = model_name
-        assert (
-            self.model_name in dino_v2_models.keys()
-        ), f"class DinoV2VitFeatureExtractor(nn.Module): is only available for {dino_v2_models.keys()}"
-        path_to_pretrained_weights = "adapteacher/engine/dino_weights/" + model_name + "_pretrain.pth"
-        assert (
-            os.path.exists(path_to_pretrained_weights)
-        ), f"DINO v2 pretrained model path {path_to_pretrained_weights} does not exist!"
-        print(f"Model Path: {path_to_pretrained_weights}")
-        
-        patch_size, embed_dim, model_func_name = dino_v2_models[self.model_name]
-        # load model
-        self.encoder = model_func_name(pretrained=False)
-        self.encoder.load_state_dict(torch.load(path_to_pretrained_weights))
-        for param in self.encoder.parameters():
-            param.requires_grad = False
-        # ensure 
-        assert self.encoder.embed_dim == embed_dim
-        self.embed_dim = self.encoder.embed_dim
-        self.patch_size = patch_size
+        if "v2" not in model_name:
+            # 'dino_vitb16'
+            self.model_name = model_name
+            # self.encoder = torch.hub.load('facebookresearch/dino:main', model_name)
+            local_dir = '/home/marc/.cache/torch/hub/facebookresearch_dino_main'
+            self.encoder = torch.hub.load(local_dir, source='local', model=model_name, path=model_name)
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+            self.embed_dim = self.encoder.embed_dim
+            self.patch_size = int(model_name.rsplit('vit',1)[-1][1:])
+            assert (cfg.INPUT.DINO_PATCH_SIZE == self.patch_size), f'Config patch size is {cfg.INPUT.DINO_PATCH_SIZE} while loaded model has a patch size of {self.patch_size}'
+        else:
+            dino_v2_models = {
+                "dinov2_vits14": (14, 384, dinov2_vits14), # patch_size, output dims, function name to create model
+                "dinov2_vitb14": (14, 768, dinov2_vitb14),
+                "dinov2_vitl14": (14, 1024, dinov2_vitl14),
+                "dinov2_vitg14": (14, 1536, dinov2_vitg14),
+            }
+            # model name to model weights
+            name_to_weights = {"dinov2_vits14": "dinov2_vits14_pretrain.pth",
+                            "dinov2_vitb14": "dinov2_vitb14_pretrain.pth",
+                            "dinov2_vitl14": "dinov2_vitl14_pretrain.pth",
+                            "dinov2_vitg14": "dinov2_vitg14_pretrain.pth"
+            }
+            # load model on cpu
+            self.model_name = model_name
+            assert (
+                self.model_name in dino_v2_models.keys()
+            ), f"class DinoV2VitFeatureExtractor(nn.Module): is only available for {dino_v2_models.keys()}"
+            path_to_pretrained_weights = "adapteacher/engine/dino_weights/" + model_name + "_pretrain.pth"
+            assert (
+                os.path.exists(path_to_pretrained_weights)
+            ), f"DINO v2 pretrained model path {path_to_pretrained_weights} does not exist!"
+            print(f"Model Path: {path_to_pretrained_weights}")
+            
+            patch_size, embed_dim, model_func_name = dino_v2_models[self.model_name]
+            # load model
+            self.encoder = model_func_name(pretrained=False)
+            self.encoder.load_state_dict(torch.load(path_to_pretrained_weights))
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+            # ensure 
+            assert self.encoder.embed_dim == embed_dim
+            self.embed_dim = self.encoder.embed_dim
+            self.patch_size = patch_size
 
 
     def forward(self, x):
@@ -81,6 +93,8 @@ class DinoV2VitFeatureExtractor(nn.Module):
         f_width = width // self.patch_size
 
         x = self.encoder.get_intermediate_layers(x)[0] # batch_size, num_patches, self.embed_dim
+        if "v2" not in self.model_name:
+            x = x[:,1:,:] # remove class token
 
         if self.normalize_feature:
             x = F.normalize(x, p=2, dim=2)
@@ -90,10 +104,13 @@ class DinoV2VitFeatureExtractor(nn.Module):
         return x_grid_features
 
 class DinoAlignHead(nn.Module):
-    def __init__(self, cnn_dim, dino_dim, normalize_feature=True):
+    def __init__(self, cnn_dim, dino_dim, normalize_feature=True, attn_head=False):
         super(DinoAlignHead, self).__init__()
         self.normalize_feature = normalize_feature
-        self.projection_layer = nn.Conv2d(cnn_dim, dino_dim, 1, 1)
+        if attn_head:
+            self.projection_layer = MHALayer(cnn_dim, dino_dim)
+        else:
+            self.projection_layer = nn.Conv2d(cnn_dim, dino_dim, 1, 1)
 
     def forward(self, feat_cnn, feat_dino):
         return self.project_RCNN_feat(feat_cnn, feat_dino)
@@ -126,4 +143,18 @@ class DinoAlignHead(nn.Module):
             return loss, sim
         else:
             return loss
+        
+class MHALayer(nn.Module):
+    def __init__(self, cnn_dim, dino_dim):
+        super(MHALayer, self).__init__()
+
+        self.attn_layer = nn.MultiheadAttention(cnn_dim, num_heads=4, batch_first=True)
+        self.projection = nn.Conv2d(cnn_dim, dino_dim, 1, 1)
+
+    def forward(self, x):
+        b,c,h,w = x.shape
+        x = x.reshape(b,c,h*w).transpose(1,2)
+        x, _ = self.attn_layer(x, x, x, need_weights=False)
+        x = self.projection(x.transpose(1,2).reshape(b,c,h,w))
+        return x 
         

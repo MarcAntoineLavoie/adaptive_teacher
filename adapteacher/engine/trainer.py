@@ -356,7 +356,7 @@ class ATeacherTrainer(DefaultTrainer):
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb16', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb8', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             dino_dim = [*model.dino_head.modules()][-2].normalized_shape[0]
-            model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature)
+            model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature, attn_head=cfg.SEMISUPNET.DINO_ATTN)
             self._register_input_hook(model, 'proposal_generator')
             self.dino_loss_weight = cfg.SEMISUPNET.DINO_LOSS_WEIGHT
             self.dino_loss_weight_target = cfg.SEMISUPNET.DINO_LOSS_WEIGHT_TARGET
@@ -1299,17 +1299,20 @@ class ATeacherTrainer(DefaultTrainer):
     def test_DINO(self):
         self.model = self.model.eval()
         self.branch = "supervised"
-        n_imgs = 100
+        n_imgs = 400
 
         test_loaders = []
         for dataset_name in self.cfg.DATASETS.TEST:
             test_loaders.append(iter(build_detection_test_loader(self.cfg, dataset_name, mapper=DatasetMapper_test(self.cfg, True))))
         n_datasets = len(test_loaders)
 
-        mask_first = True
+        mask_first = False
+        use_cnn = True
         use_bbox = False
         with torch.no_grad():
             instance_feats = []
+            instance_cnn_feats = []
+            instance_cnn_project_feats = []
             instance_class = []
             instance_area = []
             instance_dataset = []
@@ -1320,13 +1323,15 @@ class ATeacherTrainer(DefaultTrainer):
             #     if not lv1 % 10:
             #         print(lv1)
             n_instances = 0
-            for lv2 in range(n_datasets):
+            for lv2 in range(6):
+                n_img = 0
                 print(self.cfg.DATASETS.TEST[lv2])
                 for idx, data in enumerate(test_loaders[lv2]):
-                    if idx > n_imgs:
+                    if n_img >= n_imgs:
                         break
                     if not len(data[0]['instances']):
                         continue
+                    n_img += 1
                     if mask_first:
                         curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size)[0]
                         new_data = [{'image':(data[0]['image']*x[1]).long()} for x in curr_masks]
@@ -1346,8 +1351,12 @@ class ATeacherTrainer(DefaultTrainer):
                             curr_feats = [(dino_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(curr_masks)]
                     else:
                         dino_feat = self.model.dino_head(data)
-                        curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size)[0]
+                        cnn_feat = self.model.backbone(self.model.preprocess_image(data).tensor)['vgg4']
+                        cnn_rescale_feat = self.model.dino_align(cnn_feat, dino_feat)
+                        curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size,cnn_dims=cnn_feat.shape[2:])[0]
                         curr_feats = [(dino_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
+                        curr_feats_cnn = [(cnn_feat.detach().cpu().numpy()*x[-1]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
+                        curr_feats_cnn_project = [(cnn_rescale_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
                     # feats = self.model([data], branch="supervised", backbone_only=True)
                     # cnn_feat = self.model.dino_align(feats['vgg4'], dino_feat)
                     # loss_, sim_ = self.model.dino_align.dino_loss(cnn_feat, dino_feat, return_sim=True)
@@ -1356,6 +1365,11 @@ class ATeacherTrainer(DefaultTrainer):
                     #     a=1
                     curr_feats = [x/np.linalg.norm(x) for x in curr_feats]
                     instance_feats += curr_feats
+                    if use_cnn:
+                        curr_feats_cnn = [x/np.linalg.norm(x) for x in curr_feats_cnn]
+                        instance_cnn_feats += curr_feats_cnn
+                        curr_feats_cnn_project = [x/np.linalg.norm(x) for x in curr_feats_cnn_project]
+                        instance_cnn_project_feats += curr_feats_cnn_project
                     instance_class += [x[0] for x in curr_masks]
                     instance_area += [x[2].sum() for x in curr_masks]
                     instance_dataset += [self.cfg.DATASETS.TEST[lv2] for x in curr_masks]
@@ -1372,8 +1386,9 @@ class ATeacherTrainer(DefaultTrainer):
             instance_dataset = np.array(instance_dataset)
             instance_class = np.array(instance_class)
             data_dict = {'instance_feats':instance_feats, 'instance_class':instance_class, 'instance_area':instance_area, 'instance_dataset':instance_dataset,
-                         'instance_city':instance_city, 'instance_file':instance_file, 'instances_per_dataset':instances_per_dataset}
-            file_out = 'dinov1_feats_patch8_mask.pkl'
+                         'instance_city':instance_city, 'instance_file':instance_file, 'instances_per_dataset':instances_per_dataset,
+                         'instance_cnn_feats':instance_cnn_feats, 'instance_cnn_project_feats':instance_cnn_project_feats}
+            file_out = 'dinov2_cnn_feats_vitb14_nom050_fgonly_20k_all.pkl'
             with open(file_out, 'wb') as f_out:
                 pickle.dump(data_dict, f_out)
 
@@ -1520,7 +1535,7 @@ class ATeacherTrainer(DefaultTrainer):
         plt.title('Angle Distribution, weight=0.1, 40k iter.')
         plt.show()
 
-    def get_fg_mask(self, data, patch_size=14):
+    def get_fg_mask(self, data, patch_size=14, cnn_dims=[17,34]):
         out = []
         for img in data:
             if 'segm_file' in img.keys():
@@ -1535,21 +1550,23 @@ class ATeacherTrainer(DefaultTrainer):
                 mask_class = [ACDC_PIX2CLASS[x[1]] for x in pixels_flat]
                 masks_big = [tfs.apply_segmentation(np.all(pixels==x,axis=2).astype(float)) for x in pixels_flat]
                 masks_small = [torch.nn.functional.avg_pool2d(torch.tensor(np.copy(x)).unsqueeze(0),patch_size).squeeze().numpy() for x in masks_big]
-                masks = [(x,y,z,img['file_name']) for x,y,z in zip(mask_class, masks_big, masks_small)]
+                masks_cnn = [torch.nn.functional.interpolate(torch.tensor(np.copy(x)).unsqueeze(0).unsqueeze(0),size=cnn_dims,mode='bicubic',antialias=True).clamp(min=0, max=1).squeeze().numpy() for x in masks_big]
+                masks = [(x,y,z,img['file_name'],u) for x,y,z,u in zip(mask_class, masks_big, masks_small,masks_cnn)]
                 masks = [x for x in masks if x[1].sum()>25]
                 out.append(masks)
             elif 'gt_masks' in img['instances']._fields.keys():
                 if type(img['instances'].gt_masks) == BitMasks:
-                    masks = [(y.item(),x.float(),torch.nn.functional.avg_pool2d(x.float().unsqueeze(0),patch_size).squeeze().numpy(),img['file_name']) for x,y in zip(img['instances'].gt_masks,img['instances'].gt_classes)] 
+                    cnn_interp = [torch.nn.functional.interpolate(x.float().unsqueeze(0).unsqueeze(0),size=cnn_dims,mode='bicubic',antialias=True) for x in img['instances'].gt_masks]
+                    masks = [(y.item(),x.float(),torch.nn.functional.avg_pool2d(x.float().unsqueeze(0),patch_size).squeeze().numpy(),img['file_name'],z.clamp(min=0, max=1).squeeze().numpy()) for x,y,z in zip(img['instances'].gt_masks,img['instances'].gt_classes,cnn_interp)] 
                 else:
                     c, h, w = img['image'].shape
-                    masks = [(y.item(),polygons_to_bitmask(x, h, w).astype(float),torch.nn.functional.avg_pool2d(torch.tensor(polygons_to_bitmask(x, h, w).astype(float)).unsqueeze(0),14).squeeze().numpy(),img['file_name']) for x,y in zip(img['instances'].gt_masks.polygons,img['instances'].gt_classes)] 
+                    polygons = [polygons_to_bitmask(x, h, w).astype(float) for x in img['instances'].gt_masks.polygons]
+                    cnn_interp = [torch.nn.functional.interpolate(torch.tensor(x).unsqueeze(0).unsqueeze(0),size=cnn_dims,mode='bicubic',antialias=True) for x in img['instances'].gt_masks]
+                    masks = [(y.item(),x,torch.nn.functional.avg_pool2d(torch.tensor(x).unsqueeze(0),patch_size).squeeze().numpy(),img['file_name']) for x,y,z in zip(polygons,img['instances'].gt_classes,cnn_interp)] 
                 # mask_fg = sum([polygons_to_bitmask(x, h, w) for x in img['instances'].gt_masks.polygons]).astype(bool).astype(float)
                 # mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask_fg).unsqueeze(0),patch_size).squeeze().numpy()
                 out.append(masks)
             # elif 'segmentation' in img['instnaces']._fields.keys():
-
-
         return out
 
     def get_fg_mask_torch(self, data, noise_regions=None, thresh=0.2, bg_weight=1.0, has_segm=True):
@@ -2804,3 +2821,43 @@ def test_object_coloring():
 # train			0,121,24+x
 # motorcycle		0,125,0+x
 # bicycle			0,128,238+x
+
+    xs = torch.arange(dino_feat.shape[2])
+    ys = torch.arange(dino_feat.shape[3])
+    corners = (data[0]['instances'].gt_boxes[1].tensor/14).squeeze()
+
+    x_min = xs+1-corners[1]
+    x_max = corners[3]-xs
+    y_min = ys+1-corners[0]
+    y_max = corners[2]-ys
+
+    x_scale_min = torch.where(x_min < 1, x_min, 1).clamp(0,1)
+    x_scale_max = torch.where(x_max < 1, x_max, 1).clamp(0,1)
+    y_scale_min = torch.where(y_min < 1, y_min, 1).clamp(0,1)
+    y_scale_max = torch.where(y_max < 1, y_max, 1).clamp(0,1)
+    mat_ = torch.matmul((x_scale_min*x_scale_max).unsqueeze(1),(y_scale_min*y_scale_max).unsqueeze(0))
+    plt.figure();plt.imshow(mat_);plt.show()
+
+    import cv2
+    image = cv2.imread('/home/marc/.adapt/datasets/acdc/rgb_anon_trainvaltest/rgb_anon/rain/train/GP010400/GP010400_frame_000543_rgb_anon.png')
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    plt.figure(figsize=(10,10))
+    plt.imshow(image)
+    plt.axis('on')
+    plt.show()
+    ## Selecting objects with SAM
+
+    # import sys
+    # sys.path.append("..")
+    from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
+
+    sam_checkpoint = "../../segment-anything/segment_anything/weights/sam_vit_h_4b8939.pth"
+    model_type = "vit_h"
+
+    device = "cuda"
+
+    sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+    sam.to(device=device)
+
+    mask_generator = SamAutomaticMaskGenerator(sam, points_per_side=20)
+    masks = mask_generator.generate(image)
