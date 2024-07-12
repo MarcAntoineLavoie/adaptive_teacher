@@ -351,7 +351,7 @@ class ATeacherTrainer(DefaultTrainer):
                 cnn_dim = [*model.backbone.modules()][-3].num_features
             else:
                 cnn_dim = [*model.backbone.modules()][-1].num_features
-            model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
+            model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name=cfg.SEMISUPNET.DINO_MODEL, normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitg14', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb16', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb8', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()

@@ -67,6 +67,8 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.SUPPRESS_BBOX_CORR = 1.0
     _C.SEMISUPNET.PSEUDO_THRESH_BOTH = False
     _C.SEMISUPNET.PSEUDO_OBJ_THRESH = 1.0
+    _C.SEMISUPNET.UNSUP_BYPASS = "None"
+    _C.SEMISUPNET.DIS_FLAG = True
     _C.SEMISUPNET.USE_DINO = False
     _C.SEMISUPNET.DINO_LOSS_WEIGHT = 1.0
     _C.SEMISUPNET.DINO_LOSS_WEIGHT_TARGET = 1.0
@@ -74,8 +76,7 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.DINO_SOURCE_FG_THRESH = 1.0
     _C.SEMISUPNET.DINO_LOSS_NORM = True
     _C.SEMISUPNET.DINO_ATTN = False
-    _C.SEMISUPNET.UNSUP_BYPASS = "None"
-    _C.SEMISUPNET.DIS_FLAG = True
+    _C.SEMISUPNET.DINO_HEAD = "dinov2_vitb14"
 
     # dataloader
     # supervision level
