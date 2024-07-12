@@ -39,7 +39,8 @@ class DinoV2VitFeatureExtractor(nn.Module):
             # 'dino_vitb16'
             self.model_name = model_name
             # self.encoder = torch.hub.load('facebookresearch/dino:main', model_name)
-            local_dir = '/home/marc/.cache/torch/hub/facebookresearch_dino_main'
+            # local_dir = '/home/marc/.cache/torch/hub/facebookresearch_dino_main'
+            local_dir = "adapteacher/engine/dinov1/hub/facebookresearch_dino_main"
             self.encoder = torch.hub.load(local_dir, source='local', model=model_name, path=model_name)
             for param in self.encoder.parameters():
                 param.requires_grad = False
