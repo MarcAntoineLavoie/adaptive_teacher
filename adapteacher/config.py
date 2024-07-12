@@ -76,7 +76,7 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.DINO_SOURCE_FG_THRESH = 1.0
     _C.SEMISUPNET.DINO_LOSS_NORM = True
     _C.SEMISUPNET.DINO_ATTN = False
-    _C.SEMISUPNET.DINO_HEAD = "dinov2_vitb14"
+    _C.SEMISUPNET.DINO_MODEL = "dinov2_vitb14"
 
     # dataloader
     # supervision level
