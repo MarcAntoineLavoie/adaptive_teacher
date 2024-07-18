@@ -105,11 +105,15 @@ class DinoV2VitFeatureExtractor(nn.Module):
         return x_grid_features
 
 class DinoAlignHead(nn.Module):
-    def __init__(self, cnn_dim, dino_dim, normalize_feature=True, attn_head=False):
+    def __init__(self, cnn_dim, dino_dim, normalize_feature=True, head_type="Linear"):
         super(DinoAlignHead, self).__init__()
         self.normalize_feature = normalize_feature
-        if attn_head:
+        if head_type=='attention':
             self.projection_layer = MHALayer(cnn_dim, dino_dim)
+        elif head_type=='MLP':
+            self.projection_layer = nn.Sequential(nn.Conv2d(cnn_dim, 512, 1, 1),
+                                                   nn.ReLU(),
+                                                   nn.Conv2d(512, dino_dim, 1, 1))
         else:
             self.projection_layer = nn.Conv2d(cnn_dim, dino_dim, 1, 1)
 

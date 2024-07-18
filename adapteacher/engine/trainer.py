@@ -352,11 +352,11 @@ class ATeacherTrainer(DefaultTrainer):
             else:
                 cnn_dim = [*model.backbone.modules()][-1].num_features
             model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name=cfg.SEMISUPNET.DINO_MODEL, normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
-            # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitg14', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
+            # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb16', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb8', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             dino_dim = [*model.dino_head.modules()][-2].normalized_shape[0]
-            model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature, attn_head=cfg.SEMISUPNET.DINO_ATTN)
+            model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature, head_type=cfg.SEMISUPNET.DINO_HEAD)
             self._register_input_hook(model, 'proposal_generator')
             self.dino_loss_weight = cfg.SEMISUPNET.DINO_LOSS_WEIGHT
             self.dino_loss_weight_target = cfg.SEMISUPNET.DINO_LOSS_WEIGHT_TARGET
@@ -817,6 +817,8 @@ class ATeacherTrainer(DefaultTrainer):
             for key in record_dict.keys():
                 if key[:4] == "loss":
                     loss_dict[key] = record_dict[key] * 1
+                    if self.iter < self.cfg.SEMISUPNET.PRETRAIN_STEPS and "dino" not in key:
+                        loss_dict[key] *= 0
             losses = sum(loss_dict.values())
 
         else:
@@ -1028,6 +1030,9 @@ class ATeacherTrainer(DefaultTrainer):
                         loss_dict[key] = record_dict[key] * self.cfg.SEMISUPNET.DIS_LOSS_WEIGHT #Need to modify defaults and yaml
                     else:  # supervised loss
                         loss_dict[key] = record_dict[key] * 1
+                    
+                    if self.iter < self.cfg.SEMISUPNET.PRETRAIN_STEPS and "dino" not in key:
+                        loss_dict[key] *= 0
 
             losses = sum(loss_dict.values())
 
@@ -1303,12 +1308,13 @@ class ATeacherTrainer(DefaultTrainer):
 
         test_loaders = []
         for dataset_name in self.cfg.DATASETS.TEST:
+        # for dataset_name in self.cfg.DATASETS.TEST[2:]:
             test_loaders.append(iter(build_detection_test_loader(self.cfg, dataset_name, mapper=DatasetMapper_test(self.cfg, True))))
         n_datasets = len(test_loaders)
 
         mask_first = False
         use_cnn = True
-        use_bbox = False
+        use_bbox = True
         with torch.no_grad():
             instance_feats = []
             instance_cnn_feats = []
@@ -1333,27 +1339,38 @@ class ATeacherTrainer(DefaultTrainer):
                         continue
                     n_img += 1
                     if mask_first:
-                        curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size)[0]
+                        cnn_dims = np.floor(np.array(data[0]['image'].shape[1:])/32).astype(int)
+                        curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size,cnn_dims=cnn_dims, box_mask=use_bbox)[0]
                         new_data = [{'image':(data[0]['image']*x[1]).long()} for x in curr_masks]
                         n_masks = len(new_data)
                         n_max = 2
                         if n_masks > n_max:
                             curr_feats = []
+                            curr_feats_cnn = []
+                            curr_feats_cnn_project = []
                             n_batch = ceil(n_masks/n_max)
                             for i in range(n_batch):
                                 id1 = i*n_max
                                 id2 = id1 + n_max
                                 dino_feat = self.model.dino_head(new_data[id1:id2])
+                                cnn_feat = self.model.backbone(self.model.preprocess_image(new_data[id1:id2]).tensor)['vgg4']
+                                cnn_rescale_feat = self.model.dino_align(cnn_feat, dino_feat)
                                 masks_temp = curr_masks[id1:id2]
                                 curr_feats += [(dino_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(masks_temp)]
+                                curr_feats_cnn += [(cnn_feat[idx,:,:,:].detach().cpu().numpy()*x[-1]).sum(axis=(1,2)) for idx, x in enumerate(masks_temp)]
+                                curr_feats_cnn_project += [(cnn_rescale_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(masks_temp)]
                         else:
                             dino_feat = self.model.dino_head(new_data)
+                            cnn_feat = self.model.backbone(self.model.preprocess_image(new_data).tensor)['vgg4']
+                            cnn_rescale_feat = self.model.dino_align(cnn_feat, dino_feat)
                             curr_feats = [(dino_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(curr_masks)]
+                            curr_feats_cnn = [(cnn_feat[idx,:,:,:].detach().cpu().numpy()*x[-1]).sum(axis=(1,2)) for idx, x in enumerate(curr_masks)]
+                            curr_feats_cnn_project = [(cnn_rescale_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(curr_masks)]
                     else:
                         dino_feat = self.model.dino_head(data)
                         cnn_feat = self.model.backbone(self.model.preprocess_image(data).tensor)['vgg4']
                         cnn_rescale_feat = self.model.dino_align(cnn_feat, dino_feat)
-                        curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size,cnn_dims=cnn_feat.shape[2:])[0]
+                        curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size,cnn_dims=cnn_feat.shape[2:], box_mask=use_bbox)[0]
                         curr_feats = [(dino_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
                         curr_feats_cnn = [(cnn_feat.detach().cpu().numpy()*x[-1]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
                         curr_feats_cnn_project = [(cnn_rescale_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
@@ -1366,6 +1383,9 @@ class ATeacherTrainer(DefaultTrainer):
                     curr_feats = [x/np.linalg.norm(x) for x in curr_feats]
                     instance_feats += curr_feats
                     if use_cnn:
+                        norms = np.array([np.linalg.norm(x) for x in curr_feats_cnn])
+                        if any(norms < 0.00000001):
+                            a=1
                         curr_feats_cnn = [x/np.linalg.norm(x) for x in curr_feats_cnn]
                         instance_cnn_feats += curr_feats_cnn
                         curr_feats_cnn_project = [x/np.linalg.norm(x) for x in curr_feats_cnn_project]
@@ -1388,7 +1408,7 @@ class ATeacherTrainer(DefaultTrainer):
             data_dict = {'instance_feats':instance_feats, 'instance_class':instance_class, 'instance_area':instance_area, 'instance_dataset':instance_dataset,
                          'instance_city':instance_city, 'instance_file':instance_file, 'instances_per_dataset':instances_per_dataset,
                          'instance_cnn_feats':instance_cnn_feats, 'instance_cnn_project_feats':instance_cnn_project_feats}
-            file_out = 'dinov2_cnn_feats_vitb14_nom050_fgonly_20k_all.pkl'
+            file_out = 'dinov2_cnn_feats_vitb14_nom050_box_20k_all.pkl'
             with open(file_out, 'wb') as f_out:
                 pickle.dump(data_dict, f_out)
 
@@ -1535,10 +1555,13 @@ class ATeacherTrainer(DefaultTrainer):
         plt.title('Angle Distribution, weight=0.1, 40k iter.')
         plt.show()
 
-    def get_fg_mask(self, data, patch_size=14, cnn_dims=[17,34]):
+    def get_fg_mask(self, data, patch_size=14, cnn_dims=[17,34], box_mask=True):
         out = []
         for img in data:
-            if 'segm_file' in img.keys():
+            if box_mask:
+                masks = box2mask(data=data,dino_patch=patch_size,cnn_dims=cnn_dims)
+                out.append(masks)
+            elif 'segm_file' in img.keys():
                 file_split = img['file_name'].split('/')[:5]
                 file_split[3:] = ['gt_panoptic_trainval','gt_panoptic']
                 seg_file = '/'.join(file_split) + '/' + img['segm_file'].rsplit('_',1)[0] + '_panoptic.png'
@@ -2822,22 +2845,36 @@ def test_object_coloring():
 # motorcycle		0,125,0+x
 # bicycle			0,128,238+x
 
-    xs = torch.arange(dino_feat.shape[2])
-    ys = torch.arange(dino_feat.shape[3])
-    corners = (data[0]['instances'].gt_boxes[1].tensor/14).squeeze()
+def box2mask(data,dino_patch,cnn_dims):
+    c,h,w = data[0]['image'].shape
+    masks = []
+    scale_cnn = np.floor(h/cnn_dims[0]).astype(int)
+    scales = [1,dino_patch,scale_cnn]
+    for id, box in enumerate(data[0]['instances'].gt_boxes):
+        box_class = data[0]['instances'].gt_classes[id].item()
+        # box = box
+        masks_box = []
+        for scale in scales:
+            xs = torch.arange(np.floor(h/scale))
+            ys = torch.arange(np.floor(w/scale))
+            corners = box/scale
+            
+            x_min = xs+1-corners[1]
+            x_max = corners[3]-xs
+            y_min = ys+1-corners[0]
+            y_max = corners[2]-ys
 
-    x_min = xs+1-corners[1]
-    x_max = corners[3]-xs
-    y_min = ys+1-corners[0]
-    y_max = corners[2]-ys
+            x_scale_min = torch.where(x_min < 1, x_min, 1).clamp(0,1)
+            x_scale_max = torch.where(x_max < 1, x_max, 1).clamp(0,1)
+            y_scale_min = torch.where(y_min < 1, y_min, 1).clamp(0,1)
+            y_scale_max = torch.where(y_max < 1, y_max, 1).clamp(0,1)
+            masks_box.append(torch.matmul((x_scale_min*x_scale_max).unsqueeze(1),(y_scale_min*y_scale_max).unsqueeze(0)))
+        
+        masks.append((box_class, masks_box[0].float(), masks_box[1].float().numpy(), data[0]['file_name'], masks_box[2].float().numpy()))
 
-    x_scale_min = torch.where(x_min < 1, x_min, 1).clamp(0,1)
-    x_scale_max = torch.where(x_max < 1, x_max, 1).clamp(0,1)
-    y_scale_min = torch.where(y_min < 1, y_min, 1).clamp(0,1)
-    y_scale_max = torch.where(y_max < 1, y_max, 1).clamp(0,1)
-    mat_ = torch.matmul((x_scale_min*x_scale_max).unsqueeze(1),(y_scale_min*y_scale_max).unsqueeze(0))
-    plt.figure();plt.imshow(mat_);plt.show()
+    return masks
 
+def ttemp_():
     import cv2
     image = cv2.imread('/home/marc/.adapt/datasets/acdc/rgb_anon_trainvaltest/rgb_anon/rain/train/GP010400/GP010400_frame_000543_rgb_anon.png')
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
