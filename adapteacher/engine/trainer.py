@@ -344,6 +344,7 @@ class ATeacherTrainer(DefaultTrainer):
         model = self.build_model(cfg)
 
         if cfg.SEMISUPNET.USE_DINO:
+            self.dino_layer = cfg.SEMISUPNET.DIS_TYPE
             self.branch = "supervised"
             self.use_dino = True
             self.cnn_feat = {}
@@ -356,7 +357,7 @@ class ATeacherTrainer(DefaultTrainer):
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb16', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb8', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             dino_dim = [*model.dino_head.modules()][-2].normalized_shape[0]
-            model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature, head_type=cfg.SEMISUPNET.DINO_HEAD)
+            model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature, head_type=cfg.SEMISUPNET.DINO_HEAD, instance_masks=cfg.SEMISUPNET.DINO_INSTANCE_MASK)
             self._register_input_hook(model, 'proposal_generator')
             self.dino_loss_weight = cfg.SEMISUPNET.DINO_LOSS_WEIGHT
             self.dino_loss_weight_target = cfg.SEMISUPNET.DINO_LOSS_WEIGHT_TARGET
@@ -807,9 +808,9 @@ class ATeacherTrainer(DefaultTrainer):
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
                 if self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0 or self.cfg.INPUT.USE_RANDOM_NOISE:
                     mask = self.get_fg_mask_torch(label_data_q, noise_regions=label_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
-                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask) * self.dino_loss_weight
+                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=label_data_q) * self.dino_loss_weight
                 else:
-                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight
+                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=label_data_q) * self.dino_loss_weight
                 record_dict['loss_dino'] = dino_loss
 
             # weight losses
@@ -1314,7 +1315,7 @@ class ATeacherTrainer(DefaultTrainer):
 
         mask_first = False
         use_cnn = True
-        use_bbox = True
+        use_bbox = False
         with torch.no_grad():
             instance_feats = []
             instance_cnn_feats = []
@@ -1353,7 +1354,7 @@ class ATeacherTrainer(DefaultTrainer):
                                 id1 = i*n_max
                                 id2 = id1 + n_max
                                 dino_feat = self.model.dino_head(new_data[id1:id2])
-                                cnn_feat = self.model.backbone(self.model.preprocess_image(new_data[id1:id2]).tensor)['vgg4']
+                                cnn_feat = self.model.backbone(self.model.preprocess_image(new_data[id1:id2]).tensor)[self.dino_layer]
                                 cnn_rescale_feat = self.model.dino_align(cnn_feat, dino_feat)
                                 masks_temp = curr_masks[id1:id2]
                                 curr_feats += [(dino_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(masks_temp)]
@@ -1361,14 +1362,14 @@ class ATeacherTrainer(DefaultTrainer):
                                 curr_feats_cnn_project += [(cnn_rescale_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(masks_temp)]
                         else:
                             dino_feat = self.model.dino_head(new_data)
-                            cnn_feat = self.model.backbone(self.model.preprocess_image(new_data).tensor)['vgg4']
+                            cnn_feat = self.model.backbone(self.model.preprocess_image(new_data).tensor)[self.dino_layer]
                             cnn_rescale_feat = self.model.dino_align(cnn_feat, dino_feat)
                             curr_feats = [(dino_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(curr_masks)]
                             curr_feats_cnn = [(cnn_feat[idx,:,:,:].detach().cpu().numpy()*x[-1]).sum(axis=(1,2)) for idx, x in enumerate(curr_masks)]
                             curr_feats_cnn_project = [(cnn_rescale_feat[idx,:,:,:].detach().cpu().numpy()*x[2]).sum(axis=(1,2)) for idx, x in enumerate(curr_masks)]
                     else:
                         dino_feat = self.model.dino_head(data)
-                        cnn_feat = self.model.backbone(self.model.preprocess_image(data).tensor)['vgg4']
+                        cnn_feat = self.model.backbone(self.model.preprocess_image(data).tensor)[self.dino_layer]
                         cnn_rescale_feat = self.model.dino_align(cnn_feat, dino_feat)
                         curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size,cnn_dims=cnn_feat.shape[2:], box_mask=use_bbox)[0]
                         curr_feats = [(dino_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
@@ -1408,7 +1409,7 @@ class ATeacherTrainer(DefaultTrainer):
             data_dict = {'instance_feats':instance_feats, 'instance_class':instance_class, 'instance_area':instance_area, 'instance_dataset':instance_dataset,
                          'instance_city':instance_city, 'instance_file':instance_file, 'instances_per_dataset':instances_per_dataset,
                          'instance_cnn_feats':instance_cnn_feats, 'instance_cnn_project_feats':instance_cnn_project_feats}
-            file_out = 'dinov2_cnn_feats_vitb14_nom050_box_20k_all.pkl'
+            file_out = 'dino_feats_res50c4_nom.pkl'
             with open(file_out, 'wb') as f_out:
                 pickle.dump(data_dict, f_out)
 
@@ -1561,22 +1562,22 @@ class ATeacherTrainer(DefaultTrainer):
             if box_mask:
                 masks = box2mask(data=data,dino_patch=patch_size,cnn_dims=cnn_dims)
                 out.append(masks)
-            elif 'segm_file' in img.keys():
-                file_split = img['file_name'].split('/')[:5]
-                file_split[3:] = ['gt_panoptic_trainval','gt_panoptic']
-                seg_file = '/'.join(file_split) + '/' + img['segm_file'].rsplit('_',1)[0] + '_panoptic.png'
-                tfs = img['tf_data']
-                pixels = np.array(Image.open(seg_file))
-                h, w, c = pixels.shape
-                pixels_flat = np.unique(pixels.reshape(h*w,c), axis=0)
-                pixels_flat = pixels_flat[pixels_flat[:,1]>0,:]
-                mask_class = [ACDC_PIX2CLASS[x[1]] for x in pixels_flat]
-                masks_big = [tfs.apply_segmentation(np.all(pixels==x,axis=2).astype(float)) for x in pixels_flat]
-                masks_small = [torch.nn.functional.avg_pool2d(torch.tensor(np.copy(x)).unsqueeze(0),patch_size).squeeze().numpy() for x in masks_big]
-                masks_cnn = [torch.nn.functional.interpolate(torch.tensor(np.copy(x)).unsqueeze(0).unsqueeze(0),size=cnn_dims,mode='bicubic',antialias=True).clamp(min=0, max=1).squeeze().numpy() for x in masks_big]
-                masks = [(x,y,z,img['file_name'],u) for x,y,z,u in zip(mask_class, masks_big, masks_small,masks_cnn)]
-                masks = [x for x in masks if x[1].sum()>25]
-                out.append(masks)
+            # elif 'segm_file' in img.keys():
+            #     file_split = img['file_name'].split('/')[:5]
+            #     file_split[3:] = ['gt_panoptic_trainval','gt_panoptic']
+            #     seg_file = '/'.join(file_split) + '/' + img['segm_file'].rsplit('_',1)[0] + '_panoptic.png'
+            #     tfs = img['tf_data']
+            #     pixels = np.array(Image.open(seg_file))
+            #     h, w, c = pixels.shape
+            #     pixels_flat = np.unique(pixels.reshape(h*w,c), axis=0)
+            #     pixels_flat = pixels_flat[pixels_flat[:,1]>0,:]
+            #     mask_class = [ACDC_PIX2CLASS[x[1]] for x in pixels_flat]
+            #     masks_big = [tfs.apply_segmentation(np.all(pixels==x,axis=2).astype(float)) for x in pixels_flat]
+            #     masks_small = [torch.nn.functional.avg_pool2d(torch.tensor(np.copy(x)).unsqueeze(0),patch_size).squeeze().numpy() for x in masks_big]
+            #     masks_cnn = [torch.nn.functional.interpolate(torch.tensor(np.copy(x)).unsqueeze(0).unsqueeze(0),size=cnn_dims,mode='bicubic',antialias=True).clamp(min=0, max=1).squeeze().numpy() for x in masks_big]
+            #     masks = [(x,y,z,img['file_name'],u) for x,y,z,u in zip(mask_class, masks_big, masks_small,masks_cnn)]
+            #     masks = [x for x in masks if x[1].sum()>25]
+            #     out.append(masks)
             elif 'gt_masks' in img['instances']._fields.keys():
                 if type(img['instances'].gt_masks) == BitMasks:
                     cnn_interp = [torch.nn.functional.interpolate(x.float().unsqueeze(0).unsqueeze(0),size=cnn_dims,mode='bicubic',antialias=True) for x in img['instances'].gt_masks]

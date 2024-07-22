@@ -3,8 +3,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as T
+import numpy as np
 from dinov2.hub.backbones import dinov2_vits14, dinov2_vitb14, dinov2_vitl14, dinov2_vitg14
 from PIL import Image
+from detectron2.structures.masks import polygons_to_bitmask, BitMasks, PolygonMasks
 
 class dino_preprocessing():
     """
@@ -105,9 +107,10 @@ class DinoV2VitFeatureExtractor(nn.Module):
         return x_grid_features
 
 class DinoAlignHead(nn.Module):
-    def __init__(self, cnn_dim, dino_dim, normalize_feature=True, head_type="Linear"):
+    def __init__(self, cnn_dim, dino_dim, normalize_feature=True, head_type="Linear", instance_masks=False):
         super(DinoAlignHead, self).__init__()
         self.normalize_feature = normalize_feature
+        self.instance_masks = instance_masks
         if head_type=='attention':
             self.projection_layer = MHALayer(cnn_dim, dino_dim)
         elif head_type=='MLP':
@@ -128,21 +131,41 @@ class DinoAlignHead(nn.Module):
             feat_cnn = F.normalize(feat_cnn, p=2, dim=1)
         return feat_cnn
     
-    def dino_loss(self, feat_cnn, feat_dino, return_sim=False, fg_mask=None):
-        if self.normalize_feature:
-            feat_cnn = feat_cnn.permute((0,2,3,1)).unsqueeze(-2)
-            feat_dino = feat_dino.permute((0,2,3,1)).unsqueeze(-1)
-            sim = torch.matmul(feat_cnn, feat_dino)
-            if fg_mask is not None:
-                loss = ((1-sim.squeeze())*fg_mask.to(device=sim.device)).mean()
-            else:
-                loss = (1-sim).mean()
+    def dino_loss(self, feat_cnn, feat_dino, return_sim=False, fg_mask=None, gt_data=None):
+        if self.instance_masks and gt_data is not None:
+            device = feat_cnn.device
+            dino_instances = []
+            cnn_instances = []
+            for idx, img in enumerate(gt_data):
+                h,w = img['image'].shape[1:]
+                if type(img['instances'].gt_masks) is PolygonMasks:
+                    gt_masks = torch.tensor(np.concatenate([np.expand_dims(polygons_to_bitmask(x,h,w).astype(float),0) for x in img['instances'].gt_masks.polygons])).to(device=device)
+                else:
+                    gt_masks = img['instances'].gt_masks.tensor
+                scaled_masks = torch.nn.functional.interpolate(gt_masks.unsqueeze(1),size=feat_dino.shape[2:],mode='bicubic',antialias=True)
+                dino_instances.append((scaled_masks * feat_dino[idx,:,:,:]).sum(dim=2).sum(dim=2))
+                cnn_instances.append((scaled_masks * feat_cnn[idx,:,:,:]).sum(dim=2).sum(dim=2))
+            dino_instances = torch.nn.functional.normalize(torch.cat(dino_instances), dim=1)
+            cnn_instances = torch.nn.functional.normalize(torch.cat(cnn_instances), dim=1)
+            sim = torch.matmul(cnn_instances.unsqueeze(-2), dino_instances.unsqueeze(-1))
+            loss = (1-sim).mean()
+                # scaled_masks = [torch.nn.functional.interpolate(x.float().unsqueeze(0).unsqueeze(0),size=feat_dino.shape,mode='bicubic',antialias=True) for x in img['instances'].gt_masks]
+                # dino_feats = [feat_dino[id,:,:,:]*mask for mask in ]
         else:
-            sim = torch.norm(feat_cnn-feat_dino, dim=1)
-            if fg_mask is not None:
-                loss = (sim*fg_mask.to(device=sim.device)).mean() / 50
+            if self.normalize_feature:
+                feat_cnn = feat_cnn.permute((0,2,3,1)).unsqueeze(-2)
+                feat_dino = feat_dino.permute((0,2,3,1)).unsqueeze(-1)
+                sim = torch.matmul(feat_cnn, feat_dino)
+                if fg_mask is not None:
+                    loss = ((1-sim.squeeze())*fg_mask.to(device=sim.device)).mean()
+                else:
+                    loss = (1-sim).mean()
             else:
-                loss = sim.mean() / 50
+                sim = torch.norm(feat_cnn-feat_dino, dim=1)
+                if fg_mask is not None:
+                    loss = (sim*fg_mask.to(device=sim.device)).mean() / 50
+                else:
+                    loss = sim.mean() / 50
 
         if return_sim:
             return loss, sim
