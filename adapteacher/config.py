@@ -77,6 +77,7 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.DINO_LOSS_NORM = True
     _C.SEMISUPNET.DINO_HEAD = ''
     _C.SEMISUPNET.DINO_MODEL = "dinov2_vitb14"
+    _C.SEMISUPNET.DINO_INSTANCE_MASK = False
     _C.SEMISUPNET.PRETRAIN_STEPS = 0
 
     # dataloader
