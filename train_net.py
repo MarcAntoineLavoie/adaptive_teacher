@@ -152,8 +152,8 @@ def main(args):
             project="test_dino",
             name=name,
             dir=run_dir,
-            id=run_id,
-            resume="must",
+            # id=run_id,
+            # resume="allow",
             # track hyperparameters and run metadata
             config=flat_dict
         )
