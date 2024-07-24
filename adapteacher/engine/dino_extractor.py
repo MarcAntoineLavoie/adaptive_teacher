@@ -7,6 +7,7 @@ import numpy as np
 from dinov2.hub.backbones import dinov2_vits14, dinov2_vitb14, dinov2_vitl14, dinov2_vitg14
 from PIL import Image
 from detectron2.structures.masks import polygons_to_bitmask, BitMasks, PolygonMasks
+import detectron2.utils.comm as comm
 
 class dino_preprocessing():
     """
@@ -107,10 +108,12 @@ class DinoV2VitFeatureExtractor(nn.Module):
         return x_grid_features
 
 class DinoAlignHead(nn.Module):
-    def __init__(self, cnn_dim, dino_dim, normalize_feature=True, head_type="Linear", instance_masks=False):
+    def __init__(self, cfg, cnn_dim, dino_dim, normalize_feature=True):
         super(DinoAlignHead, self).__init__()
+        head_type = cfg.SEMISUPNET.DINO_HEAD
+        self.instance_masks = cfg.SEMISUPNET.DINO_INSTANCE_MASK
+        self.loss_type = cfg.SEMISUPNET.DINO_ALIGN_LOSS
         self.normalize_feature = normalize_feature
-        self.instance_masks = instance_masks
         if head_type=='attention':
             self.projection_layer = MHALayer(cnn_dim, dino_dim)
         elif head_type=='MLP':
@@ -119,6 +122,15 @@ class DinoAlignHead(nn.Module):
                                                    nn.Conv2d(512, dino_dim, 1, 1))
         else:
             self.projection_layer = nn.Conv2d(cnn_dim, dino_dim, 1, 1)
+        
+        if self.loss_type == 'contrast' :
+            self.scale_loss = False
+            self.queue_length = cfg.SEMISUPNET.DINO_CONT_QUEUE_LENGTH
+            self.contrast_temp = cfg.SEMISUPNET.DINO_CONT_TEMP
+            self.default_temp = 0.1
+            self.curr_id = 0
+            self.register_buffer("queue_dino", torch.randn(self.queue_length,dino_dim))
+            self.register_buffer("queue_cnn", torch.randn(self.queue_length,dino_dim))
 
     def forward(self, feat_cnn, feat_dino):
         return self.project_RCNN_feat(feat_cnn, feat_dino)
@@ -149,19 +161,25 @@ class DinoAlignHead(nn.Module):
                 cnn_instances.append((scaled_masks * feat_cnn[idx,:,:,:]).sum(dim=2).sum(dim=2))
             dino_instances = torch.nn.functional.normalize(torch.cat(dino_instances), dim=1)
             cnn_instances = torch.nn.functional.normalize(torch.cat(cnn_instances), dim=1)
-            sim = torch.matmul(cnn_instances.unsqueeze(-2), dino_instances.unsqueeze(-1))
-            loss = (1-sim).mean()
+            if self.loss_type == 'similarity':
+                sim = torch.matmul(cnn_instances.unsqueeze(-2), dino_instances.unsqueeze(-1))
+                loss = (1-sim).mean()
+            elif self.loss_type == "contrast":
+                loss, sim = self.contrast_loss(dino_instances, cnn_instances)
                 # scaled_masks = [torch.nn.functional.interpolate(x.float().unsqueeze(0).unsqueeze(0),size=feat_dino.shape,mode='bicubic',antialias=True) for x in img['instances'].gt_masks]
                 # dino_feats = [feat_dino[id,:,:,:]*mask for mask in ]
         else:
             if self.normalize_feature:
                 feat_cnn = feat_cnn.permute((0,2,3,1)).unsqueeze(-2)
                 feat_dino = feat_dino.permute((0,2,3,1)).unsqueeze(-1)
-                sim = torch.matmul(feat_cnn, feat_dino)
-                if fg_mask is not None:
-                    loss = ((1-sim.squeeze())*fg_mask.to(device=sim.device)).mean()
-                else:
-                    loss = (1-sim).mean()
+                if self.loss_type == 'similarity':
+                    sim = torch.matmul(feat_cnn, feat_dino)
+                    if fg_mask is not None:
+                        loss = ((1-sim.squeeze())*fg_mask.to(device=sim.device)).mean()
+                    else:
+                        loss = (1-sim).mean()
+                elif self.loss_type == "contrast":
+                    loss, sim = self.contrast_loss(dino_instances, cnn_instances)
             else:
                 sim = torch.norm(feat_cnn-feat_dino, dim=1)
                 if fg_mask is not None:
@@ -173,7 +191,61 @@ class DinoAlignHead(nn.Module):
             return loss, sim
         else:
             return loss
-        
+    
+    def contrast_loss(self, dino_instances, cnn_instances):
+        with torch.no_grad():
+            dino_queue = torch.clone(self.queue_dino).to(device=dino_instances.device)
+            dino_queue /= dino_queue.norm(dim=1).unsqueeze(1)
+            self.update_queue(dino_instances)
+        dino_full = torch.cat((dino_instances, dino_queue))
+
+        sim = torch.matmul(cnn_instances, dino_full.T)
+        sims_scaled = sim / self.contrast_temp
+        if self.scale_loss:
+            sims_scaled -= torch.max(sims_scaled, dim=1, keepdim=True)
+        exp_sim = torch.exp(sims_scaled)
+        log_prob = sims_scaled - torch.log(exp_sim.sum(1, keepdim=True))
+        loss = -torch.diagonal(log_prob).mean() * (self.contrast_temp/self.default_temp)
+        return loss, sim[:,:sim.shape[0]]
+    
+    @torch.no_grad()
+    def update_queue(self, dino_instances):
+        if comm.get_world_size() > 1:
+            all_instances = gather_across_devices(dino_instances)
+        else:
+            all_instances = dino_instances
+        n = all_instances.shape[0]
+        if (self.curr_id+n) >= self.queue_length:
+            n1 = self.queue_length - self.curr_id
+            self.queue_dino[self.curr_id:,:] = dino_instances[:n1,:]
+            n2 = n-n1
+            self.queue_dino[:n2,:] = dino_instances[n1:,:]
+            self.curr_id = n1
+        else:
+            self.queue_dino[self.curr_id:self.curr_id+n,:] = dino_instances
+            self.curr_id += n
+
+@torch.no_grad()
+def gather_across_devices(tensor1, pad=512):
+    """
+    From https://github.com/zhangyifei01/MoCo-v2-SupContrast/blob/main/moco/builder_in.py#L185
+    """
+    if pad:
+        n, c =  tensor1.shape
+        n_tensor = torch.tensor(n,device=tensor1.device)
+        pad_tensor = torch.zeros((pad, c), device=tensor1.device, dtype=tensor1.dtype)
+        pad_tensor[:n,:] = tensor1
+        tensor1 = pad_tensor
+    tensors_gather = [torch.ones_like(tensor1) for _ in range(torch.distributed.get_world_size())]
+    torch.distributed.all_gather(tensors_gather, tensor1, async_op=False)
+    n_gather = [n_tensor for _ in range(torch.distributed.get_world_size())]
+    torch.is_distributed.all_gather(n_gather, n_tensor, async_op=False)
+    unpad_tensor = [x[:y,:] for x,y in zip(tensors_gather, n_gather)]
+
+    output = torch.cat(unpad_tensor, dim=0)
+    return output
+
+
 class MHALayer(nn.Module):
     def __init__(self, cnn_dim, dino_dim):
         super(MHALayer, self).__init__()

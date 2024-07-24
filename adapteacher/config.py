@@ -78,6 +78,9 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.DINO_HEAD = ''
     _C.SEMISUPNET.DINO_MODEL = "dinov2_vitb14"
     _C.SEMISUPNET.DINO_INSTANCE_MASK = False
+    _C.SEMISUPNET.DINO_ALIGN_LOSS = "similarity"
+    _C.SEMISUPNET.DINO_CONT_QUEUE_LENGTH = 4096
+    _C.SEMISUPNET.DINO_CONT_TEMP = 0.1
     _C.SEMISUPNET.PRETRAIN_STEPS = 0
 
     # dataloader
