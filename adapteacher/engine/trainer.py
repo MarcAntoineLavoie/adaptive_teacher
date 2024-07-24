@@ -357,7 +357,7 @@ class ATeacherTrainer(DefaultTrainer):
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb16', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb8', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             dino_dim = [*model.dino_head.modules()][-2].normalized_shape[0]
-            model.dino_align = DinoAlignHead(cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature, head_type=cfg.SEMISUPNET.DINO_HEAD, instance_masks=cfg.SEMISUPNET.DINO_INSTANCE_MASK)
+            model.dino_align = DinoAlignHead(cfg, cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature)
             self._register_input_hook(model, 'proposal_generator')
             self.dino_loss_weight = cfg.SEMISUPNET.DINO_LOSS_WEIGHT
             self.dino_loss_weight_target = cfg.SEMISUPNET.DINO_LOSS_WEIGHT_TARGET
