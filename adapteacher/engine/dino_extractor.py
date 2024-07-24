@@ -217,12 +217,12 @@ class DinoAlignHead(nn.Module):
         n = all_instances.shape[0]
         if (self.curr_id+n) >= self.queue_length:
             n1 = self.queue_length - self.curr_id
-            self.queue_dino[self.curr_id:,:] = dino_instances[:n1,:]
+            self.queue_dino[self.curr_id:,:] = all_instances[:n1,:]
             n2 = n-n1
-            self.queue_dino[:n2,:] = dino_instances[n1:,:]
+            self.queue_dino[:n2,:] = all_instances[n1:,:]
             self.curr_id = n1
         else:
-            self.queue_dino[self.curr_id:self.curr_id+n,:] = dino_instances
+            self.queue_dino[self.curr_id:self.curr_id+n,:] = all_instances
             self.curr_id += n
 
 @torch.no_grad()
@@ -238,8 +238,8 @@ def gather_across_devices(tensor1, pad=512):
         tensor1 = pad_tensor
     tensors_gather = [torch.ones_like(tensor1) for _ in range(torch.distributed.get_world_size())]
     torch.distributed.all_gather(tensors_gather, tensor1, async_op=False)
-    n_gather = [n_tensor for _ in range(torch.distributed.get_world_size())]
-    torch.is_distributed.all_gather(n_gather, n_tensor, async_op=False)
+    n_gather = [torch.ones_like(n_tensor) for _ in range(torch.distributed.get_world_size())]
+    torch.distributed.all_gather(n_gather, n_tensor, async_op=False)
     unpad_tensor = [x[:y,:] for x,y in zip(tensors_gather, n_gather)]
 
     output = torch.cat(unpad_tensor, dim=0)
