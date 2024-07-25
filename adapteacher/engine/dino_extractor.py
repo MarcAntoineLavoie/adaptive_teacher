@@ -120,6 +120,12 @@ class DinoAlignHead(nn.Module):
             self.projection_layer = nn.Sequential(nn.Conv2d(cnn_dim, 512, 1, 1),
                                                    nn.ReLU(),
                                                    nn.Conv2d(512, dino_dim, 1, 1))
+        elif head_type=='MLP3':
+            self.projection_layer = nn.Sequential(nn.Conv2d(cnn_dim, 512, 1, 1),
+                                                   nn.ReLU(),
+                                                   nn.Conv2d(512, 512, 1, 1),
+                                                   nn.ReLU(),
+                                                   nn.Conv2d(512, dino_dim, 1, 1))
         else:
             self.projection_layer = nn.Conv2d(cnn_dim, dino_dim, 1, 1)
         
@@ -131,6 +137,7 @@ class DinoAlignHead(nn.Module):
             self.curr_id = 0
             self.register_buffer("queue_dino", torch.randn(self.queue_length,dino_dim))
             self.register_buffer("queue_cnn", torch.randn(self.queue_length,dino_dim))
+            self.ignore_closest = cfg.SEMISUPNET.DINO_CONT_IGNORE_CLOSEST
 
     def forward(self, feat_cnn, feat_dino):
         return self.project_RCNN_feat(feat_cnn, feat_dino)
@@ -206,6 +213,16 @@ class DinoAlignHead(nn.Module):
         if self.scale_loss:
             sims_scaled -= torch.max(sims_scaled, dim=1, keepdim=True)
         exp_sim = torch.exp(sims_scaled)
+        if self.ignore_closest:
+            with torch.no_grad():
+                k = int(self.ignore_closest/100 * sim.shape[1])
+                n = sim.shape[0]
+                neg_sim = torch.clone(exp_sim)
+                neg_sim[range(n),range(n)] = -10
+                vals, ids = torch.topk(neg_sim,k,sorted=False)
+                mask = torch.ones_like(exp_sim)
+                mask.scatter_(1,ids,0)
+            exp_sim=mask*exp_sim
         log_prob = sims_scaled - torch.log(exp_sim.sum(1, keepdim=True))
         loss = -torch.diagonal(log_prob).mean() * (self.contrast_temp/self.default_temp)
         return loss, sim[:,:sim.shape[0]]
