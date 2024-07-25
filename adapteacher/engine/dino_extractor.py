@@ -157,6 +157,8 @@ class DinoAlignHead(nn.Module):
                 else:
                     gt_masks = img['instances'].gt_masks.tensor
                 scaled_masks = torch.nn.functional.interpolate(gt_masks.unsqueeze(1),size=feat_dino.shape[2:],mode='bicubic',antialias=True)
+                ids = torch.where(scaled_masks.squeeze(1).sum(1).sum(1))[0]
+                scaled_masks = scaled_masks[ids,:,:,:]
                 dino_instances.append((scaled_masks * feat_dino[idx,:,:,:]).sum(dim=2).sum(dim=2))
                 cnn_instances.append((scaled_masks * feat_cnn[idx,:,:,:]).sum(dim=2).sum(dim=2))
             dino_instances = torch.nn.functional.normalize(torch.cat(dino_instances), dim=1)
