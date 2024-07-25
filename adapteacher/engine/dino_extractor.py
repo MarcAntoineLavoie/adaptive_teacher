@@ -228,7 +228,7 @@ class DinoAlignHead(nn.Module):
             self.curr_id += n
 
 @torch.no_grad()
-def gather_across_devices(tensor1, pad=512):
+def gather_across_devices(tensor1, pad=1024):
     """
     From https://github.com/zhangyifei01/MoCo-v2-SupContrast/blob/main/moco/builder_in.py#L185
     """
