@@ -353,8 +353,8 @@ class DatasetMapper_test(DatasetMapper):
     3. Prepare data and annotations to Tensor and :class:`Instances`
     """
 
-    def __init__(self, cfg, is_train=True, keep_tf_data=True):
-        self.augmentation = new_augs(cfg, is_train)
+    def __init__(self, cfg, is_train=True, keep_tf_data=True, use_w=False):
+        self.augmentation = new_augs(cfg, is_train, use_w=use_w)
         # include crop into self.augmentation
         if cfg.INPUT.CROP.ENABLED and False:
             if cfg.INPUT.PAD_CROP:
@@ -409,6 +409,8 @@ class DatasetMapper_test(DatasetMapper):
             mask_format = "bitmask"
         elif 'cityscapes' in dataset_dict['file_name']:
             mask_format = "bitmask"
+        elif 'acdc' in dataset_dict['file_name']:
+            mask_format = 'bitmask'
         else:
             mask_format = self.mask_format
 
@@ -730,7 +732,7 @@ class DatasetMapperWithStrongAugs(DatasetMapper):
 
         return dataset_dict
     
-def new_augs(cfg, is_train):
+def new_augs(cfg, is_train, use_w=False):
     """
     Create a list of default :class:`Augmentation` from config.
     Now it includes resizing and flipping.
@@ -738,14 +740,24 @@ def new_augs(cfg, is_train):
     Returns:
         list[Augmentation]
     """
-    dino_patch = cfg.INPUT.DINO_PATCH_SIZE
-    if is_train:
-        min_size = cfg.INPUT.MIN_SIZE_TRAIN
-        sample_style = cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING
+    if use_w:
+        dino_patch = cfg.INPUT.DINO_PATCH_SIZE
+        if is_train:
+            min_size = cfg.INPUT.MIN_SIZE_TRAIN
+            sample_style = cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING
+        else:
+            max_size = cfg.INPUT.MAX_SIZE_TEST
+            sample_style = "choice"
+        augmentation = [ResizeTransformDinoScaleW(max_size, dino_patch, sample_style)]
     else:
-        min_size = cfg.INPUT.MIN_SIZE_TEST
-        sample_style = "choice"
-    augmentation = [ResizeTransformDinoScale(min_size, dino_patch, sample_style)]
+        dino_patch = cfg.INPUT.DINO_PATCH_SIZE
+        if is_train:
+            min_size = cfg.INPUT.MIN_SIZE_TRAIN
+            sample_style = cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING
+        else:
+            min_size = cfg.INPUT.MIN_SIZE_TEST
+            sample_style = "choice"
+        augmentation = [ResizeTransformDinoScale(min_size, dino_patch, sample_style)]
     if is_train and cfg.INPUT.RANDOM_FLIP != "none":
         augmentation.append(
             T.RandomFlip(
@@ -834,6 +846,86 @@ class ResizeTransformDinoScale(Transform):
 
     def inverse(self):
         return ResizeTransformDinoScale(self.new_h, self.new_w, self.h, self.w, self.interp)
+
+class ResizeTransformDinoScaleW(Transform):
+    """
+    Resize the image to a target size.
+    """
+
+    def __init__(self, new_w, dino_patch, inv=False, interp=None):
+        """
+        Args:
+            h, w (int): original image size
+            new_w (int): new image size
+            interp: PIL interpolation methods, defaults to bilinear.
+        """
+        # TODO decide on PIL vs opencv
+        super().__init__()
+        if interp is None:
+            interp = Image.BILINEAR
+        if type(new_w) == tuple:
+            new_w = new_w[1]
+        self.set_w = new_w
+        self.dino_patch = dino_patch
+        self.inv = inv
+        self.interp = interp
+
+    def apply_image(self, img, interp=None):
+        # assert img.shape[:2] == (self.h, self.w)
+        assert img.shape[0] < img.shape[1]
+        assert len(img.shape) <= 4
+        self.h = img.shape[0]
+        self.w = img.shape[1]
+        self.new_w = floor(self.set_w / self.dino_patch) * self.dino_patch
+        scale = self.new_w / self.w
+        temp_h = scale * self.h
+        self.new_h = round(temp_h / self.dino_patch) * self.dino_patch
+
+        interp_method = interp if interp is not None else self.interp
+
+        if img.dtype == np.uint8:
+            if len(img.shape) > 2 and img.shape[2] == 1:
+                pil_image = Image.fromarray(img[:, :, 0], mode="L")
+            else:
+                pil_image = Image.fromarray(img)
+            pil_image = pil_image.resize((self.new_w, self.new_h), interp_method)
+            ret = np.asarray(pil_image)
+            if len(img.shape) > 2 and img.shape[2] == 1:
+                ret = np.expand_dims(ret, -1)
+        else:
+            # PIL only supports uint8
+            if any(x < 0 for x in img.strides):
+                img = np.ascontiguousarray(img)
+            img = torch.from_numpy(img)
+            shape = list(img.shape)
+            shape_4d = shape[:2] + [1] * (4 - len(shape)) + shape[2:]
+            img = img.view(shape_4d).permute(2, 3, 0, 1)  # hw(c) -> nchw
+            _PIL_RESIZE_TO_INTERPOLATE_MODE = {
+                Image.NEAREST: "nearest",
+                Image.BILINEAR: "bilinear",
+                Image.BICUBIC: "bicubic",
+            }
+            mode = _PIL_RESIZE_TO_INTERPOLATE_MODE[interp_method]
+            align_corners = None if mode == "nearest" else False
+            img = F.interpolate(
+                img, (self.new_h, self.new_w), mode=mode, align_corners=align_corners
+            )
+            shape[:2] = (self.new_h, self.new_w)
+            ret = img.permute(2, 3, 0, 1).view(shape).numpy()  # nchw -> hw(c)
+
+        return ret
+
+    def apply_coords(self, coords):
+        coords[:, 0] = coords[:, 0] * (self.new_w * 1.0 / self.w)
+        coords[:, 1] = coords[:, 1] * (self.new_h * 1.0 / self.h)
+        return coords
+
+    def apply_segmentation(self, segmentation):
+        segmentation = self.apply_image(segmentation, interp=Image.NEAREST)
+        return segmentation
+
+    def inverse(self):
+        return ResizeTransformDinoScaleW(self.new_h, self.new_w, self.h, self.w, self.interp)
 
 class RandomCropAndPad(Augmentation):
     """

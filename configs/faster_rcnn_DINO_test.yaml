@@ -18,7 +18,7 @@ INPUT:
     # ENABLED: False
   MIN_SIZE_TRAIN: (550,)
   USE_RANDOM_NOISE: False
-  DINO_PATCH_SIZE: 16
+  DINO_PATCH_SIZE: 14
   PAD_CROP: True
 MODEL:
   MASK_ON: False
@@ -65,8 +65,6 @@ MODEL:
     SCALE_EXPO_SCORE: 1.0
     SCALE_EXPO_IOU: 1.0
     GT_INJECT_COV_WEIGHT: 1.0
-  # WEIGHTS: "/media/marc/data_checks1/R-101.pkl"
-  WEIGHTS: "/media/marc/data_checks1/R-50.pkl"
 SOLVER:
   LR_SCHEDULER_NAME: "WarmupTwoStageMultiStepLR"
   STEPS: (60000, 80000, 90000, 360000)
@@ -141,7 +139,8 @@ SEMISUPNET:
   DINO_SOURCE_FG_THRESH: 0.2
   DINO_LOSS_NORM: True
   DINO_HEAD: 'MLP3'
-  DINO_MODEL: "dino_vitb16"
+  DINO_MODEL: "dinov2_vitb14"
+  # DINO_MODEL: "dino_vitb16"
   DINO_INSTANCE_MASK: True
   DINO_ALIGN_LOSS: "contrast"
   DINO_CONT_QUEUE_LENGTH: 512

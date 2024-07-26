@@ -65,6 +65,10 @@ def setup(args):
     # cfg.DATASETS.TRAIN_UNLABEL = ("cityscapes_foggy_train")
     cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_fog","ACDC_val_night","ACDC_val_rain","ACDC_val_snow")
     # cfg.INPUT.MIN_SIZE_TRAIN = (800,)
+    if cfg.SEMISUPNET.DINO_BASE:
+        scale = cfg.INPUT.DINO_PATCH_SIZE
+        if cfg.INPUT.MAX_SIZE_TEST % scale:
+            cfg.INPUT.MAX_SIZE_TEST =  floor(cfg.INPUT.MAX_SIZE_TEST / scale)*scale
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
@@ -228,6 +232,10 @@ if __name__ == "__main__":
     # args.output_dir = 'output/dino/dino_tests/test_all_pseudo/'
     # args.output_dir = 'output/dino/dino_tests/test_print6000/'
     # args.output_dir = 'output/dino/dino_teacher_rate/dino_nom050_EMA0999_v1/'
+    # args.output_dir = 'output/dino/dino_teacher_rate/dino_nom050_EMA0999_fgonly_v1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/resnet/dino_twin_pretrain1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/resnet/dino_twin_resnet50_100_mlp_c4_v1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/resnet/dino_twin_resnet50_500_mlp_pretrain_masks_c5_v2/'
 
     # args.use_old_cfg = True
     args.use_old_cfg = False

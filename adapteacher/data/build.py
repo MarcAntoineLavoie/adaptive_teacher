@@ -24,7 +24,7 @@ from detectron2.data.build import (
 from adapteacher.data.common import (
     AspectRatioGroupedSemiSupDatasetTwoCrop, AspectRatioGroupedSemiSupDatasetTwoCrop_detect
 )
-from adapteacher.data.dataset_mapper import DatasetMapperTwoCropSeparate, DatasetMapperWithWeakAugs
+from adapteacher.data.dataset_mapper import DatasetMapperTwoCropSeparate, DatasetMapperWithWeakAugs, DatasetMapper_test
 
 
 """
@@ -117,6 +117,8 @@ def build_detection_semisup_train_loader(cfg, mapper=None):
 
 # uesed by evaluation
 def build_detection_test_loader(cfg, dataset_name, mapper=None):
+    if cfg.SEMISUPNET.DINO_BASE:
+        mapper = DatasetMapper_test(cfg, is_train=False, keep_tf_data=False, use_w=True)
     dataset_dicts = get_detection_dataset_dicts(
         [dataset_name],
         filter_empty=False,

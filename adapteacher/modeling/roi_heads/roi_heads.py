@@ -14,6 +14,7 @@ from detectron2.modeling.roi_heads import (
 )
 from detectron2.modeling.roi_heads.fast_rcnn import FastRCNNOutputLayers
 from adapteacher.modeling.roi_heads.fast_rcnn import FastRCNNFocaltLossOutputLayers
+from adapteacher.modeling.simple_pooler import SimpleROIPooler
 
 import numpy as np
 from detectron2.modeling.poolers import ROIPooler
@@ -29,6 +30,7 @@ from fvcore.nn import smooth_l1_loss
 from adapteacher.modeling.modeling_utils import get_probabilistic_loss_weight, covariance_output_to_cholesky, clamp_log_variance
 from torch.autograd.function import Function
 from detectron2.modeling.matcher import Matcher
+import math
 
 @ROI_HEADS_REGISTRY.register()
 class StandardROIHeadsPseudoLab(StandardROIHeads):
@@ -47,12 +49,22 @@ class StandardROIHeadsPseudoLab(StandardROIHeads):
         assert len(set(in_channels)) == 1, in_channels
         in_channels = in_channels[0]
 
-        box_pooler = ROIPooler(
-            output_size=pooler_resolution,
-            scales=pooler_scales,
-            sampling_ratio=sampling_ratio,
-            pooler_type=pooler_type,
-        )
+        min_level = -(math.log2(pooler_scales[0]))
+        max_level = -(math.log2(pooler_scales[-1]))
+        if math.isclose(min_level, int(min_level)) and math.isclose(max_level, int(max_level)):
+            box_pooler = ROIPooler(
+                output_size=pooler_resolution,
+                scales=pooler_scales,
+                sampling_ratio=sampling_ratio,
+                pooler_type=pooler_type,
+            )
+        else:
+            box_pooler = SimpleROIPooler(
+                output_size=pooler_resolution,
+                scales=pooler_scales,
+                sampling_ratio=sampling_ratio,
+                pooler_type=pooler_type,
+            )
         box_head = build_box_head(
             cfg,
             ShapeSpec(
