@@ -343,7 +343,7 @@ class ATeacherTrainer(DefaultTrainer):
         # create an student model
         model = self.build_model(cfg)
 
-        if cfg.SEMISUPNET.USE_DINO:
+        if cfg.SEMISUPNET.USE_DINO and not cfg.SEMISUPNET.DINO_BASE:
             self.dino_layer = cfg.SEMISUPNET.DIS_TYPE
             self.branch = "supervised"
             self.use_dino = True
@@ -367,8 +367,6 @@ class ATeacherTrainer(DefaultTrainer):
             model.dino_align = model.dino_align.to((torch.device(cfg.MODEL.DEVICE)))
         else:
             self.use_dino = False
-        if cfg.SEMISUPNET.DINO_BASE:
-            self.use_dino = False
             
         optimizer = self.build_optimizer(cfg, model)
 
@@ -381,8 +379,9 @@ class ATeacherTrainer(DefaultTrainer):
             model = DistributedDataParallel(
                 model, device_ids=[comm.get_local_rank()], broadcast_buffers=False
             )
-            model.dino_head = model.module.dino_head
-            model.dino_align = model.module.dino_align
+            if self.use_dino:
+                model.dino_head = model.module.dino_head
+                model.dino_align = model.module.dino_align
 
         TrainerBase.__init__(self)
         self._trainer = (AMPTrainer if cfg.SOLVER.AMP.ENABLED else SimpleTrainer)(
