@@ -350,9 +350,11 @@ class ATeacherTrainer(DefaultTrainer):
             self.cnn_feat = {}
             if "vgg" in cfg.MODEL.BACKBONE.NAME:
                 cnn_dim = [*model.backbone.modules()][-3].num_features
+            elif 'dino' in cfg.MODEL.BACKBONE.NAME:
+                cnn_dim = 768
             else:
                 cnn_dim = [*model.backbone.modules()][-1].num_features
-            model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name=cfg.SEMISUPNET.DINO_MODEL, normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
+            model.dino_head = DinoV2VitFeatureExtractor(cfg, model_name=cfg.SEMISUPNET.DINO_MODEL, normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb16', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb8', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
@@ -365,7 +367,9 @@ class ATeacherTrainer(DefaultTrainer):
             model.dino_align = model.dino_align.to((torch.device(cfg.MODEL.DEVICE)))
         else:
             self.use_dino = False
-
+        if cfg.SEMISUPNET.DINO_BASE:
+            self.use_dino = False
+            
         optimizer = self.build_optimizer(cfg, model)
 
         # create an teacher model
@@ -1409,7 +1413,7 @@ class ATeacherTrainer(DefaultTrainer):
             data_dict = {'instance_feats':instance_feats, 'instance_class':instance_class, 'instance_area':instance_area, 'instance_dataset':instance_dataset,
                          'instance_city':instance_city, 'instance_file':instance_file, 'instances_per_dataset':instances_per_dataset,
                          'instance_cnn_feats':instance_cnn_feats, 'instance_cnn_project_feats':instance_cnn_project_feats}
-            file_out = 'dino_feats_res50c4_nom.pkl'
+            file_out = 'dino_feats_resnet50c4_mlp_40k.pkl'
             with open(file_out, 'wb') as f_out:
                 pickle.dump(data_dict, f_out)
 
