@@ -169,15 +169,21 @@ class DinoAlignHead(nn.Module):
                 scaled_masks = scaled_masks[ids,:,:,:]
                 dino_instances.append((scaled_masks * feat_dino[idx,:,:,:]).sum(dim=2).sum(dim=2))
                 cnn_instances.append((scaled_masks * feat_cnn[idx,:,:,:]).sum(dim=2).sum(dim=2))
-            dino_instances = torch.nn.functional.normalize(torch.cat(dino_instances), dim=1)
-            cnn_instances = torch.nn.functional.normalize(torch.cat(cnn_instances), dim=1)
-            if self.loss_type == 'similarity':
-                sim = torch.matmul(cnn_instances.unsqueeze(-2), dino_instances.unsqueeze(-1))
-                loss = (1-sim).mean()
-            elif self.loss_type == "contrast":
-                loss, sim = self.contrast_loss(dino_instances, cnn_instances)
-                # scaled_masks = [torch.nn.functional.interpolate(x.float().unsqueeze(0).unsqueeze(0),size=feat_dino.shape,mode='bicubic',antialias=True) for x in img['instances'].gt_masks]
-                # dino_feats = [feat_dino[id,:,:,:]*mask for mask in ]
+            if self.normalize_feature:
+                dino_instances = torch.nn.functional.normalize(torch.cat(dino_instances), dim=1)
+                cnn_instances = torch.nn.functional.normalize(torch.cat(cnn_instances), dim=1)
+                if self.loss_type == 'similarity':
+                    sim = torch.matmul(cnn_instances.unsqueeze(-2), dino_instances.unsqueeze(-1))
+                    loss = (1-sim).mean()
+                elif self.loss_type == "contrast":
+                    loss, sim = self.contrast_loss(dino_instances, cnn_instances)
+                    # scaled_masks = [torch.nn.functional.interpolate(x.float().unsqueeze(0).unsqueeze(0),size=feat_dino.shape,mode='bicubic',antialias=True) for x in img['instances'].gt_masks]
+                    # dino_feats = [feat_dino[id,:,:,:]*mask for mask in ]
+            else:
+                dino_instances = torch.cat(dino_instances,dim=0)
+                cnn_instances = torch.cat(cnn_instances,dim=0)
+                sim = torch.linalg.norm(dino_instances-cnn_instances, dim=1, ord=1)
+                loss = sim.mean() / 100
         else:
             if self.normalize_feature:
                 feat_cnn = feat_cnn.permute((0,2,3,1)).unsqueeze(-2)
@@ -189,11 +195,11 @@ class DinoAlignHead(nn.Module):
                     else:
                         loss = (1-sim).mean()
                 elif self.loss_type == "contrast":
-                    loss, sim = self.contrast_loss(dino_instances, cnn_instances)
+                    loss, sim = self.contrast_loss(feat_dino, feat_cnn)
             else:
                 sim = torch.linalg.norm(feat_cnn-feat_dino, dim=1, ord=1)
                 if fg_mask is not None:
-                    loss = (sim*fg_mask.to(device=sim.device)).mean() / 50
+                    loss = (sim*fg_mask.to(device=sim.device)).mean() / 100
                 else:
                     loss = sim.mean() / 100
 
