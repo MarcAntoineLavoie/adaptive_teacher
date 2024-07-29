@@ -785,6 +785,10 @@ class ATeacherTrainer(DefaultTrainer):
             
         # burn-in stage (supervised training with labeled data)
 
+        if self.cfg.SEMISUPNET.FREEZE_POSTPRETRAIN and self.iter == self.cfg.SEMISUPNET.PRETRAIN_STEPS:
+            for param in self.model.backbone.parameters():
+                param.requires_grad = False
+
         if self.iter % self.cfg.SEMISUPNET.TEACHER_UPDATE_ITER == 0:
             self._update_teacher_model(
                 keep_rate=self.cfg.SEMISUPNET.EMA_KEEP_RATE)
@@ -1412,7 +1416,7 @@ class ATeacherTrainer(DefaultTrainer):
             data_dict = {'instance_feats':instance_feats, 'instance_class':instance_class, 'instance_area':instance_area, 'instance_dataset':instance_dataset,
                          'instance_city':instance_city, 'instance_file':instance_file, 'instances_per_dataset':instances_per_dataset,
                          'instance_cnn_feats':instance_cnn_feats, 'instance_cnn_project_feats':instance_cnn_project_feats}
-            file_out = 'dino_feats_resnet50c4_mlp_40k.pkl'
+            file_out = 'dino_feats_resnet50c4_mlp_20k.pkl'
             with open(file_out, 'wb') as f_out:
                 pickle.dump(data_dict, f_out)
 

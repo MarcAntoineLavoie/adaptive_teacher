@@ -83,6 +83,7 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.DINO_CONT_TEMP = 0.1
     _C.SEMISUPNET.DINO_CONT_IGNORE_CLOSEST = 0
     _C.SEMISUPNET.PRETRAIN_STEPS = 0
+    _C.SEMISUPNET.FREEZE_POSTPRETRAIN = False
     _C.SEMISUPNET.DINO_BASE = False
 
     # dataloader

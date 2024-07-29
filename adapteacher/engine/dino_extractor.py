@@ -182,7 +182,7 @@ class DinoAlignHead(nn.Module):
             else:
                 dino_instances = torch.cat(dino_instances,dim=0)
                 cnn_instances = torch.cat(cnn_instances,dim=0)
-                sim = torch.linalg.norm(dino_instances-cnn_instances, dim=1, ord=1)
+                sim = torch.linalg.norm(dino_instances-cnn_instances, dim=1, ord=2)
                 loss = sim.mean() / 100
         else:
             if self.normalize_feature:
@@ -197,7 +197,7 @@ class DinoAlignHead(nn.Module):
                 elif self.loss_type == "contrast":
                     loss, sim = self.contrast_loss(feat_dino, feat_cnn)
             else:
-                sim = torch.linalg.norm(feat_cnn-feat_dino, dim=1, ord=1)
+                sim = torch.linalg.norm(feat_cnn-feat_dino, dim=1, ord=2)
                 if fg_mask is not None:
                     loss = (sim*fg_mask.to(device=sim.device)).mean() / 100
                 else:
