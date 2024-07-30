@@ -785,7 +785,7 @@ class ATeacherTrainer(DefaultTrainer):
             
         # burn-in stage (supervised training with labeled data)
 
-        if self.cfg.SEMISUPNET.FREEZE_POSTPRETRAIN and self.iter == self.cfg.SEMISUPNET.PRETRAIN_STEPS:
+        if self.cfg.SEMISUPNET.FREEZE_POSTPRETRAIN and self.iter == (self.cfg.SEMISUPNET.PRETRAIN_STEPS + 2):
             if 'module' in self.model.__dict__['_modules']:
                 backbone = self.model.module.backbone
             else:
