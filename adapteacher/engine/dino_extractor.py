@@ -115,18 +115,19 @@ class DinoAlignHead(nn.Module):
         self.instance_masks = cfg.SEMISUPNET.DINO_INSTANCE_MASK
         self.loss_type = cfg.SEMISUPNET.DINO_ALIGN_LOSS
         self.normalize_feature = normalize_feature
+        self.proj_dim = cfg.SEMISUPNET.DINO_PROJ_DIM
         if head_type=='attention':
             self.projection_layer = MHALayer(cnn_dim, dino_dim)
         elif head_type=='MLP':
-            self.projection_layer = nn.Sequential(nn.Conv2d(cnn_dim, 512, 1, 1),
+            self.projection_layer = nn.Sequential(nn.Conv2d(cnn_dim, self.proj_dim, 1, 1),
                                                    nn.ReLU(),
-                                                   nn.Conv2d(512, dino_dim, 1, 1))
+                                                   nn.Conv2d(self.proj_dim, dino_dim, 1, 1))
         elif head_type=='MLP3':
-            self.projection_layer = nn.Sequential(nn.Conv2d(cnn_dim, 512, 1, 1),
+            self.projection_layer = nn.Sequential(nn.Conv2d(cnn_dim, self.proj_dim, 1, 1),
                                                    nn.ReLU(),
-                                                   nn.Conv2d(512, 512, 1, 1),
+                                                   nn.Conv2d(self.proj_dim, self.proj_dim, 1, 1),
                                                    nn.ReLU(),
-                                                   nn.Conv2d(512, dino_dim, 1, 1))
+                                                   nn.Conv2d(self.proj_dim, dino_dim, 1, 1))
         else:
             self.projection_layer = nn.Conv2d(cnn_dim, dino_dim, 1, 1)
         

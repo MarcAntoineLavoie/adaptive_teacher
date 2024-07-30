@@ -85,6 +85,7 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.PRETRAIN_STEPS = 0
     _C.SEMISUPNET.FREEZE_POSTPRETRAIN = False
     _C.SEMISUPNET.DINO_BASE = False
+    _C.SEMISUPNET.DINO_PROJ_DIM = 512
 
     # dataloader
     # supervision level
