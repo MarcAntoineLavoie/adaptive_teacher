@@ -786,7 +786,11 @@ class ATeacherTrainer(DefaultTrainer):
         # burn-in stage (supervised training with labeled data)
 
         if self.cfg.SEMISUPNET.FREEZE_POSTPRETRAIN and self.iter == self.cfg.SEMISUPNET.PRETRAIN_STEPS:
-            for param in self.model.backbone.parameters():
+            if 'module' in self.model.__dict__['_modules']:
+                backbone = self.model.module.backbone
+            else:
+                backbone = self.model.backbone
+            for param in backbone.parameters():
                 param.requires_grad = False
 
         if self.iter % self.cfg.SEMISUPNET.TEACHER_UPDATE_ITER == 0:
