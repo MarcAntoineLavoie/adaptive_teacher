@@ -785,13 +785,19 @@ class ATeacherTrainer(DefaultTrainer):
             
         # burn-in stage (supervised training with labeled data)
 
-        if self.cfg.SEMISUPNET.FREEZE_POSTPRETRAIN and self.iter == (self.cfg.SEMISUPNET.PRETRAIN_STEPS + 2):
+        if self.cfg.SEMISUPNET.FREEZE_POSTPRETRAIN and self.iter == (self.cfg.SEMISUPNET.PRETRAIN_STEPS):
             if 'module' in self.model.__dict__['_modules']:
-                backbone = self.model.module.backbone
+                model = self.model.module
+                for param in model.backbone.parameters():
+                    param.requires_grad = False
+                self.model = DistributedDataParallel(
+                    model, device_ids=[comm.get_local_rank()], broadcast_buffers=False, find_unused_parameters=False)
+                if self.use_dino:
+                    self.model.dino_head = self.model.module.dino_head
+                    self.model.dino_align = self.model.module.dino_align
             else:
-                backbone = self.model.backbone
-            for param in backbone.parameters():
-                param.requires_grad = False
+                for param in self.model.backbone.parameters():
+                    param.requires_grad = False
 
         if self.iter % self.cfg.SEMISUPNET.TEACHER_UPDATE_ITER == 0:
             self._update_teacher_model(
