@@ -119,7 +119,7 @@ class DinoAlignHead(nn.Module):
         if cfg.SEMISUPNET.DINO_PROJ_GELU:
             nl_layer = nn.GELU()
         else:
-            nl_layer = nn.RELU()
+            nl_layer = nn.ReLU()
         if head_type=='attention':
             self.projection_layer = MHALayer(cnn_dim, dino_dim)
         elif head_type=='MLP':
