@@ -350,7 +350,7 @@ class ATeacherTrainer(DefaultTrainer):
             self.cnn_feat = {}
             if "vgg" in cfg.MODEL.BACKBONE.NAME:
                 cnn_dim = [*model.backbone.modules()][-3].num_features
-            elif 'dino' in cfg.MODEL.BACKBONE.NAME:
+            elif 'dino' in cfg.MODEL.BACKBONE.NAME or 'BiCephal' in cfg.MODEL.META_ARCHITECTURE:
                 cnn_dim = 768
             else:
                 cnn_dim = [*model.backbone.modules()][-1].num_features
@@ -837,6 +837,8 @@ class ATeacherTrainer(DefaultTrainer):
                     loss_dict[key] = record_dict[key] * 1
                     if self.iter < self.cfg.SEMISUPNET.PRETRAIN_STEPS and "dino" not in key:
                         loss_dict[key] *= 0
+                    if 'biceph' in key:
+                        loss_dict[key] *= self.cfg.SEMISUPNET.BICEPHAL_SCALE
             losses = sum(loss_dict.values())
 
         else:
@@ -1049,6 +1051,9 @@ class ATeacherTrainer(DefaultTrainer):
                     else:  # supervised loss
                         loss_dict[key] = record_dict[key] * 1
                     
+                    if 'biceph' in key:
+                        loss_dict[key] *= self.cfg.SEMISUPNET.BICEPHAL_SCALE
+
                     if self.iter < self.cfg.SEMISUPNET.PRETRAIN_STEPS and "dino" not in key:
                         loss_dict[key] *= 0
 

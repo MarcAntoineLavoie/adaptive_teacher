@@ -88,6 +88,9 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.DINO_PROJ_DIM = 512
     _C.SEMISUPNET.DINO_CONT_PROTOTYPES = False
     _C.SEMISUPNET.DINO_PROJ_GELU = False
+    _C.SEMISUPNET.DINO_COMBINED_HEAD = False
+    _C.SEMISUPNET.BICEPHAL_PROJ = "linear"
+    _C.SEMISUPNET.BICEPHAL_SCALE = 1.0
 
     # dataloader
     # supervision level

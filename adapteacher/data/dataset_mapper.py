@@ -186,7 +186,7 @@ class DatasetMapperTwoCropSeparate_detect(DatasetMapper):
     """
 
     def __init__(self, cfg, is_train=True, keep_tf_data=False):
-        if cfg.SEMISUPNET.USE_DINO:
+        if cfg.SEMISUPNET.USE_DINO or 'BiCephal' in cfg.MODEL.META_ARCHITECTURE:
             self.augmentation = new_augs(cfg, is_train)
         else:
             self.augmentation = utils.build_augmentation(cfg, is_train)
