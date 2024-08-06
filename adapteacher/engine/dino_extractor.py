@@ -163,15 +163,17 @@ class DinoAlignHead(nn.Module):
             cnn_instances = []
             for idx, img in enumerate(gt_data):
                 h,w = img['image'].shape[1:]
+                if not 'gt_masks' in img['instances']._fields and 'instances_gt' in img.keys():
+                    img['instances'] = img['instances_gt']
                 if type(img['instances'].gt_masks) is PolygonMasks:
                     if not len(img['instances'].gt_masks):
                         continue
                     gt_masks = torch.tensor(np.concatenate([np.expand_dims(polygons_to_bitmask(x,h,w).astype(float),0) for x in img['instances'].gt_masks.polygons])).to(device=device)
                 else:
-                    gt_masks = img['instances'].gt_masks.tensor
+                    gt_masks = img['instances'].gt_masks.tensor.to(float)
                 scaled_masks = torch.nn.functional.interpolate(gt_masks.unsqueeze(1),size=feat_dino.shape[2:],mode='bicubic',antialias=True)
                 ids = torch.where(scaled_masks.squeeze(1).sum(1).sum(1))[0]
-                scaled_masks = scaled_masks[ids,:,:,:]
+                scaled_masks = scaled_masks[ids,:,:,:].to(device=feat_dino.device)
                 dino_instances.append((scaled_masks * feat_dino[idx,:,:,:]).sum(dim=2).sum(dim=2))
                 cnn_instances.append((scaled_masks * feat_cnn[idx,:,:,:]).sum(dim=2).sum(dim=2))
             if self.normalize_feature:
