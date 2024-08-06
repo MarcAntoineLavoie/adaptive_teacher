@@ -35,7 +35,7 @@ def _get_cityscapes_files(image_dir, gt_dir):
         city_img_dir = os.path.join(image_dir, city)
         city_gt_dir = os.path.join(gt_dir, city)
         for basename in PathManager.ls(city_img_dir):
-            if load_only_002 and '0.02.png' not in basename:
+            if load_only_002 and "foggy" in image_dir and '0.02.png' not in basename:
                 continue
             image_file = os.path.join(city_img_dir, basename)
 
@@ -304,4 +304,6 @@ def load_ACDC_instances(gt_dir):
     for dict_per_image in data_dict:
         for anno in dict_per_image["annotations"]:
             anno["category_id"] = dataset_id_to_contiguous_id[anno["category_id"]]
+            if 'segmentation' in anno.keys():
+                anno['segmentation']
     return data_dict

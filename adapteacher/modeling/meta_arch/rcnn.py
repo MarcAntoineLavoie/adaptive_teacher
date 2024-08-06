@@ -1313,7 +1313,7 @@ class DinoV2VitFeatureExtractor_wrapper(DinoV2VitFeatureExtractor):
         return {self.output_layer: x_grid_features}
 
 @META_ARCH_REGISTRY.register()
-class BiCephalRCNNN(GeneralizedRCNN):
+class TwoTrunksRCNNN(GeneralizedRCNN):
     @configurable
     def __init__(
         self,
@@ -1523,7 +1523,7 @@ class BiCephalRCNNN(GeneralizedRCNN):
             proposals_rpn_d, proposal_losses_d = self.proposal_generator(
                 images, features_dino, gt_instances
             )
-            proposal_losses_d = {k+'_biceph':v for k,v in proposal_losses_d.items()}
+            proposal_losses_d = {k+'_trunk':v for k,v in proposal_losses_d.items()}
 
 
             # roi_head lower branch
@@ -1535,7 +1535,7 @@ class BiCephalRCNNN(GeneralizedRCNN):
                 targets=gt_instances,
                 branch=branch,
             )
-            detector_losses_d = {k+'_biceph':v for k,v in detector_losses_d.items()}
+            detector_losses_d = {k+'_trunk':v for k,v in detector_losses_d.items()}
 
             # visualization
             if self.vis_period > 0:
@@ -1670,7 +1670,7 @@ class BiCephalRCNNN(GeneralizedRCNN):
 
 def ProjBackbone(cfg,backbone,dino_dim=768):
     cnn_dim = backbone.output_shape()[list(backbone.output_shape().keys())[0]].channels
-    if cfg.SEMISUPNET.BICEPHAL_PROJ == 'MLP':
+    if cfg.SEMISUPNET.TRUNK_PROJ == 'MLP':
         proj_dim = cfg.SEMISUPNET.DINO_PROJ_DIM   
         projection_layer = nn.Sequential(nn.Conv2d(cnn_dim, proj_dim, 1, 1),
                                                    nn.ReLU(),
