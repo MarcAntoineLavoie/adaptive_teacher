@@ -304,6 +304,4 @@ def load_ACDC_instances(gt_dir):
     for dict_per_image in data_dict:
         for anno in dict_per_image["annotations"]:
             anno["category_id"] = dataset_id_to_contiguous_id[anno["category_id"]]
-            if 'segmentation' in anno.keys():
-                anno['segmentation']
     return data_dict

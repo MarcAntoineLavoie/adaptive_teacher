@@ -837,8 +837,8 @@ class ATeacherTrainer(DefaultTrainer):
                     loss_dict[key] = record_dict[key] * 1
                     if self.iter < self.cfg.SEMISUPNET.PRETRAIN_STEPS and "dino" not in key:
                         loss_dict[key] *= 0
-                    if 'biceph' in key:
-                        loss_dict[key] *= self.cfg.SEMISUPNET.BICEPHAL_SCALE
+                    if 'trunk' in key:
+                        loss_dict[key] *= self.cfg.SEMISUPNET.TRUNK_SCALE
             losses = sum(loss_dict.values())
 
         else:
@@ -862,7 +862,7 @@ class ATeacherTrainer(DefaultTrainer):
             
 
             #  0. remove unlabeled data labels
-            if self.align_gt_proposals or self.eval_pseudo_labels:
+            if self.align_gt_proposals or self.eval_pseudo_labels or (self.use_dino and self.cfg.SEMISUPNET.DINO_INSTANCE_MASK):
                 label_data_q = self.hold_label(label_data_q)
                 label_data_k = self.hold_label(label_data_k)
                 unlabel_data_q = self.hold_label(unlabel_data_q)
@@ -980,9 +980,9 @@ class ATeacherTrainer(DefaultTrainer):
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
                 if self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0 or self.cfg.INPUT.USE_RANDOM_NOISE:
                     mask = self.get_fg_mask_torch(all_label_data, noise_regions=label_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
-                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask) * self.dino_loss_weight
+                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=all_label_data) * self.dino_loss_weight
                 else:
-                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight
+                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=all_label_data) * self.dino_loss_weight
                 record_dict['loss_dino'] = dino_loss
 
             # 5. input strongly augmented unlabeled data into model
@@ -996,9 +996,9 @@ class ATeacherTrainer(DefaultTrainer):
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
                 if self.cfg.INPUT.USE_RANDOM_NOISE:
                     mask = self.get_fg_mask_torch(all_unlabel_data, noise_regions=unlabel_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT, has_segm=False)
-                    dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask) * self.dino_loss_weight_target
+                    dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=all_unlabel_data) * self.dino_loss_weight_target
                 else:
-                    dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat) * self.dino_loss_weight_target
+                    dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=all_unlabel_data) * self.dino_loss_weight_target
                 record_dict['loss_dino_pseud'] = dino_loss_pseudo
 
             new_record_all_unlabel_data = {}
@@ -1051,8 +1051,8 @@ class ATeacherTrainer(DefaultTrainer):
                     else:  # supervised loss
                         loss_dict[key] = record_dict[key] * 1
                     
-                    if 'biceph' in key:
-                        loss_dict[key] *= self.cfg.SEMISUPNET.BICEPHAL_SCALE
+                    if 'trunk' in key:
+                        loss_dict[key] *= self.cfg.SEMISUPNET.TRUNK_SCALE
 
                     if self.iter < self.cfg.SEMISUPNET.PRETRAIN_STEPS and "dino" not in key:
                         loss_dict[key] *= 0

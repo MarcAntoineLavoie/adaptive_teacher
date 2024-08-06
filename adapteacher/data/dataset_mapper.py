@@ -258,6 +258,10 @@ class DatasetMapperTwoCropSeparate_detect(DatasetMapper):
 
         if 'foggy' in dataset_dict['file_name']:
             mask_format = "bitmask"
+        elif 'cityscapes' in dataset_dict['file_name']:
+            mask_format = "bitmask"
+        elif 'acdc' in dataset_dict['file_name']:
+            mask_format = 'bitmask'
         else:
             mask_format = self.mask_format
 
