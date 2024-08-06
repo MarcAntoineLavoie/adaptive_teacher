@@ -862,7 +862,7 @@ class ATeacherTrainer(DefaultTrainer):
             
 
             #  0. remove unlabeled data labels
-            if self.align_gt_proposals or self.eval_pseudo_labels or (self.use_dino and self.cfg.SEMISUPNET.DINO_INSTANCE_MASK):
+            if self.align_gt_proposals or self.eval_pseudo_labels or (self.use_dino and self.cfg.SEMISUPNET.DINO_TARGET_MASK):
                 label_data_q = self.hold_label(label_data_q)
                 label_data_k = self.hold_label(label_data_k)
                 unlabel_data_q = self.hold_label(unlabel_data_q)
