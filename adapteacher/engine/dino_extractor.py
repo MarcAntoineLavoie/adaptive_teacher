@@ -165,9 +165,9 @@ class DinoAlignHead(nn.Module):
                 h,w = img['image'].shape[1:]
                 if not 'gt_masks' in img['instances']._fields and 'instances_gt' in img.keys():
                     img['instances'] = img['instances_gt']
+                if not len(img['instances']):
+                    continue
                 if type(img['instances'].gt_masks) is PolygonMasks:
-                    if not len(img['instances'].gt_masks):
-                        continue
                     gt_masks = torch.tensor(np.concatenate([np.expand_dims(polygons_to_bitmask(x,h,w).astype(float),0) for x in img['instances'].gt_masks.polygons])).to(device=device)
                 else:
                     gt_masks = img['instances'].gt_masks.tensor.to(float)

@@ -1034,6 +1034,8 @@ class ATeacherTrainer(DefaultTrainer):
             loss_dict = {}
             for key in record_dict.keys():
                 if key.startswith("loss"):
+                    if torch.isnan(record_dict[key]):
+                        record_dict[key] = 0
                     if key == "loss_rpn_loc_pseudo" or key == "loss_box_reg_pseudo":
                         # pseudo bbox regression <- 0
                         loss_dict[key] = record_dict[key] * 0
@@ -2921,3 +2923,32 @@ def ttemp_():
 
     mask_generator = SamAutomaticMaskGenerator(sam, points_per_side=20)
     masks = mask_generator.generate(image)
+
+
+def temp123():
+    import matplotlib.pyplot as plt
+    import matplotlib
+    from detectron2.utils.visualizer import Visualizer
+
+    names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
+    img_ = inputs[0]['image'].transpose(0,1).transpose(1,2)
+
+    test_v = Visualizer(img_[:, :, [2,1,0]])
+    temp1 = inputs[0]['instances'].gt_boxes
+    labels1 = [names[x] for x in inputs[0]['instances'].gt_classes.tolist()]
+    # temp = proposals_roih_unsup_k[curr_id].pred_boxes
+    temp1.tensor = temp1.tensor.cpu()
+    test_v.overlay_instances(boxes=temp1, labels=labels1)
+    img1 = test_v.get_output().get_image()
+
+    test_v = Visualizer(img_[:, :, [2,1,0]])
+    temp2 = outputs[0]['instances'][:10].pred_boxes
+    labels2 = [names[x] for x in outputs[0]['instances'][:10].pred_classes.tolist()]
+    # temp = proposals_roih_unsup_k[curr_id].pred_boxes
+    temp2.tensor = temp2.tensor.cpu()
+    test_v.overlay_instances(boxes=temp2, labels=labels2)
+    img2 = test_v.get_output().get_image()
+
+    plt.figure();plt.imshow(img1)
+    plt.figure();plt.imshow(img2)
+    plt.show()
