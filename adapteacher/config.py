@@ -90,8 +90,13 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.DINO_CONT_PROTOTYPES = False
     _C.SEMISUPNET.DINO_PROJ_GELU = False
     _C.SEMISUPNET.DINO_COMBINED_HEAD = False
+    _C.SEMISUPNET.DINO_TARGET_PSEUDOGT = None
     _C.SEMISUPNET.TRUNK_PROJ = "linear"
     _C.SEMISUPNET.TRUNK_SCALE = 1.0
+    # _C.SEMISUPNET.SCALE_LOC_LOSS_SOURCE = 1.0
+    # _C.SEMISUPNET.SCALE_LOC_LOSS_TARGET = 1.0
+
+    # _C.NEW_ALLOWED = True
 
     # dataloader
     # supervision level
