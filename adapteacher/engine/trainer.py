@@ -962,8 +962,8 @@ class ATeacherTrainer(DefaultTrainer):
                 for i in range(len(instances)):
                     new_instances = Instances(gt_unlabel_k[i].image_size)
                     new_instances.gt_boxes = Boxes(torch.tensor(boxes[i][0]))
-                    new_instances.gt_scores = torch.tensor(boxes[i][1])
-                    new_instances.gt_classes = torch.tensor(boxes[i][2])
+                    new_instances.gt_scores = boxes[i][1]
+                    new_instances.gt_classes = boxes[i][2]
                     dino_pseudo_labels.append(new_instances)
 
                 joint_proposal_dict = {}
