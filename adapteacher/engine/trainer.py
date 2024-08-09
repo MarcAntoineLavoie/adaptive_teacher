@@ -367,6 +367,14 @@ class ATeacherTrainer(DefaultTrainer):
             model.dino_align = model.dino_align.to((torch.device(cfg.MODEL.DEVICE)))
         else:
             self.use_dino = False
+        
+        if type(cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT) == str:
+            file_in = cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT
+            with open(file_in, 'rb') as f_in:
+                temp_dict = pickle.load(f_in)
+            self.dino_pseudogt = {}
+            for img in temp_dict:
+                self.dino_pseudogt[img['image_id']] = img
             
         optimizer = self.build_optimizer(cfg, model)
 
@@ -666,6 +674,9 @@ class ATeacherTrainer(DefaultTrainer):
             if 'iou' in proposal_bbox_inst._fields.keys():
                 new_proposal_inst.gt_iou = proposal_bbox_inst.iou[valid_map]
 
+        elif proposal_type == "dino":
+            valid_map = proposal_bbox_inst.gt_scores > thres
+            new_proposal_inst = proposal_bbox_inst[valid_map]
         return new_proposal_inst, 0
     
     def threshold_self(self, proposal_bbox_inst, thres=0.7):
@@ -920,26 +931,45 @@ class ATeacherTrainer(DefaultTrainer):
             #  2. Pseudo-labeling
             cur_threshold = self.cfg.SEMISUPNET.BBOX_THRESHOLD
 
-            joint_proposal_dict = {}
-            joint_proposal_dict["proposals_rpn"] = proposals_rpn_unsup_k
-            #Process pseudo labels and thresholding
-            (
-                pesudo_proposals_rpn_unsup_k,
-                nun_pseudo_bbox_rpn,
-                _
-            ) = self.process_pseudo_label(
-                proposals_rpn_unsup_k, cur_threshold, "rpn", "thresholding"
-            )
-            # analysis_pred, _ = self.probe.compute_num_box(gt_unlabel_k,pesudo_proposals_rpn_unsup_k,'pred',True)
-            # record_dict.update(analysis_pred)
+            if not type(self.cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT) == str:
+                joint_proposal_dict = {}
+                joint_proposal_dict["proposals_rpn"] = proposals_rpn_unsup_k
+                #Process pseudo labels and thresholding
+                (
+                    pesudo_proposals_rpn_unsup_k,
+                    nun_pseudo_bbox_rpn,
+                    _
+                ) = self.process_pseudo_label(
+                    proposals_rpn_unsup_k, cur_threshold, "rpn", "thresholding"
+                )
+                # analysis_pred, _ = self.probe.compute_num_box(gt_unlabel_k,pesudo_proposals_rpn_unsup_k,'pred',True)
+                # record_dict.update(analysis_pred)
 
-            joint_proposal_dict["proposals_pseudo_rpn"] = pesudo_proposals_rpn_unsup_k
-            # Pseudo_labeling for ROI head (bbox location/objectness)
-            pesudo_proposals_roih_unsup_k, _, overlap = self.process_pseudo_label(
-                proposals_roih_unsup_k, cur_threshold, "roih", "thresholding", gt_labels=hold_labels
-            )
-            joint_proposal_dict["proposals_pseudo_roih"] = pesudo_proposals_roih_unsup_k
-            record_dict.update({'iou_overlap':overlap})
+                joint_proposal_dict["proposals_pseudo_rpn"] = pesudo_proposals_rpn_unsup_k
+                # Pseudo_labeling for ROI head (bbox location/objectness)
+                pesudo_proposals_roih_unsup_k, _, overlap = self.process_pseudo_label(
+                    proposals_roih_unsup_k, cur_threshold, "roih", "thresholding", gt_labels=hold_labels
+                )
+                joint_proposal_dict["proposals_pseudo_roih"] = pesudo_proposals_roih_unsup_k
+                record_dict.update({'iou_overlap':overlap})
+
+
+            else:
+                # boxes = self.dino_pseudogt[x['image_id']]['instances_dino'].pred_boxes
+                instances = [self.dino_pseudogt[x['image_id']]['instances_dino'] for x in unlabel_data_q]
+                boxes = [(x['tf_data'].apply_box(y.pred_boxes),y.scores,y.pred_classes) for x,y in zip(unlabel_data_q,instances)]
+                dino_pseudo_labels = []
+                for i in range(len(instances)):
+                    new_instances = Instances(gt_unlabel_k[i].image_size)
+                    new_instances.gt_boxes = Boxes(torch.tensor(boxes[i][0]))
+                    new_instances.gt_scores = torch.tensor(boxes[i][1])
+                    new_instances.gt_classes = torch.tensor(boxes[i][2])
+                    dino_pseudo_labels.append(new_instances)
+
+                joint_proposal_dict = {}
+                pseudo_proposals_dino, _, overlap = self.process_pseudo_label(dino_pseudo_labels, cur_threshold, "dino", "thresholding")
+                joint_proposal_dict["proposals_pseudo_roih"] = pseudo_proposals_dino
+                record_dict.update({'iou_overlap':overlap})
 
             # 3. add pseudo-label to unlabeled data
 
@@ -2930,25 +2960,35 @@ def temp123():
     import matplotlib
     from detectron2.utils.visualizer import Visualizer
 
-    names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
-    img_ = inputs[0]['image'].transpose(0,1).transpose(1,2)
+    # scale = (1330+672*2)/4096
+    scale = (1330+742*2)/(1080*2+1920)
 
-    test_v = Visualizer(img_[:, :, [2,1,0]])
-    temp1 = inputs[0]['instances'].gt_boxes
-    labels1 = [names[x] for x in inputs[0]['instances'].gt_classes.tolist()]
-    # temp = proposals_roih_unsup_k[curr_id].pred_boxes
-    temp1.tensor = temp1.tensor.cpu()
-    test_v.overlay_instances(boxes=temp1, labels=labels1)
+    names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
+    img_ = tens2img(unlabel_data_q[0]['image'])
+    boxes1 = unlabel_data_q[0]['instances_gt'].gt_boxes.tensor.numpy()
+    labels1 = unlabel_data_q[0]['instances_gt'].gt_classes.tolist()
+    tfs = unlabel_data_q[0]['tf_data']
+    ids = torch.where(self.dino_pseudogt[unlabel_data_q[0]['image_id']]['instances_dino'].scores > 0.75)[0]
+    boxes2_ = self.dino_pseudogt[unlabel_data_q[0]['image_id']]['instances_dino'][ids].pred_boxes.numpy()
+    boxes2 = tfs.apply_box(boxes2_)
+    labels2 = self.dino_pseudogt[unlabel_data_q[0]['image_id']]['instances_dino'][ids].pred_classes.tolist()
+
+    # img_ = inputs[0]['image'].transpose(0,1).transpose(1,2)
+    # temp1 = inputs[0]['instances'].gt_boxes
+    # labels1 = [names[x] for x in inputs[0]['instances'].gt_classes.tolist()]
+    # temp1.tensor = temp1.tensor.cpu()
+
+    test_v = Visualizer(img_)
+    test_v.overlay_instances(boxes=boxes1, labels=labels1)
     img1 = test_v.get_output().get_image()
 
-    test_v = Visualizer(img_[:, :, [2,1,0]])
-    temp2 = outputs[0]['instances'][:10].pred_boxes
-    labels2 = [names[x] for x in outputs[0]['instances'][:10].pred_classes.tolist()]
-    # temp = proposals_roih_unsup_k[curr_id].pred_boxes
-    temp2.tensor = temp2.tensor.cpu()
-    test_v.overlay_instances(boxes=temp2, labels=labels2)
+    test_v = Visualizer(img_)
+    test_v.overlay_instances(boxes=boxes2, labels=labels2)
     img2 = test_v.get_output().get_image()
 
     plt.figure();plt.imshow(img1)
     plt.figure();plt.imshow(img2)
     plt.show()
+
+def tens2img(x):
+    return x.transpose(0,1).transpose(1,2).cpu().numpy()[:,:,[2,1,0]]
