@@ -196,6 +196,8 @@ _RAW_ACDC_SPLITS = {
     "ACDC_val_rain": ("acdc/rgb_anon_trainvaltest/rgb_anon/rain/val/", "acdc/gt_detection_trainval/gt_detection/rain/val/"),
     "ACDC_train_snow": ("acdc/rgb_anon_trainvaltest/rgb_anon/snow/train/", "acdc/gt_detection_trainval/gt_detection/snow/train/"),
     "ACDC_val_snow": ("acdc/rgb_anon_trainvaltest/rgb_anon/snow/val/", "acdc/gt_detection_trainval/gt_detection/snow/val/"),
+    "ACDC_train_all": ("acdc/rgb_anon_trainvaltest/rgb_anon/all/train/", "acdc/gt_detection_trainval/gt_detection/all/train/"),
+    "ACDC_val_all": ("acdc/rgb_anon_trainvaltest/rgb_anon/all/val/", "acdc/gt_detection_trainval/gt_detection/all/val/"),
 }
 
 
