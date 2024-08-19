@@ -193,16 +193,17 @@ class DinoAlignHead(nn.Module):
                 loss = sim.mean() / 100
         else:
             if self.normalize_feature:
-                feat_cnn = feat_cnn.permute((0,2,3,1)).unsqueeze(-2)
-                feat_dino = feat_dino.permute((0,2,3,1)).unsqueeze(-1)
+                feat_cnn = feat_cnn.permute((0,2,3,1))
+                feat_dino = feat_dino.permute((0,2,3,1))
                 if self.loss_type == 'similarity':
-                    sim = torch.matmul(feat_cnn, feat_dino)
+                    sim = torch.matmul(feat_cnn.unsqueeze(-2), feat_dino.unsqueeze(-1))
                     if fg_mask is not None:
                         loss = ((1-sim.squeeze())*fg_mask.to(device=sim.device)).mean()
                     else:
                         loss = (1-sim).mean()
                 elif self.loss_type == "contrast":
-                    loss, sim = self.contrast_loss(feat_dino, feat_cnn)
+                    c = feat_cnn.shape[-1]
+                    loss, sim = self.contrast_loss(feat_dino.reshape(-1,c), feat_cnn.reshape(-1,c))
             else:
                 sim = torch.linalg.norm(feat_cnn-feat_dino, dim=1, ord=2)
                 if fg_mask is not None:
