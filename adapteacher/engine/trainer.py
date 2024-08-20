@@ -850,6 +850,10 @@ class ATeacherTrainer(DefaultTrainer):
                         loss_dict[key] *= 0
                     if 'trunk' in key:
                         loss_dict[key] *= self.cfg.SEMISUPNET.TRUNK_SCALE
+                                    
+                    if loss_dict[key] > 10:
+                        loss_dict[key] = loss_dict[key] / loss_dict[key].item() * 10
+                        
             losses = sum(loss_dict.values())
 
         else:
@@ -1088,6 +1092,9 @@ class ATeacherTrainer(DefaultTrainer):
 
                     if self.iter < self.cfg.SEMISUPNET.PRETRAIN_STEPS and "dino" not in key:
                         loss_dict[key] *= 0
+                    
+                    if loss_dict[key] > 10:
+                        loss_dict[key] = loss_dict[key] / loss_dict[key].item() * 10
 
             losses = sum(loss_dict.values())
 
