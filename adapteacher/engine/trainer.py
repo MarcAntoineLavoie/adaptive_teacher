@@ -851,9 +851,9 @@ class ATeacherTrainer(DefaultTrainer):
                     if 'trunk' in key:
                         loss_dict[key] *= self.cfg.SEMISUPNET.TRUNK_SCALE
                                     
-                    if loss_dict[key] > 10:
-                        loss_dict[key] = loss_dict[key] / loss_dict[key].item() * 10
-                        
+                    # if loss_dict[key] > 10:
+                    #     loss_dict[key] = loss_dict[key] / loss_dict[key].item() * 10
+
             losses = sum(loss_dict.values())
 
         else:
@@ -1084,6 +1084,8 @@ class ATeacherTrainer(DefaultTrainer):
                         # import pdb
                         # pdb.set_trace()
                         loss_dict[key] = record_dict[key] * self.cfg.SEMISUPNET.DIS_LOSS_WEIGHT #Need to modify defaults and yaml
+                        if loss_dict[key] > 1:
+                            loss_dict[key] = loss_dict[key] / loss_dict[key].item() * 1
                     else:  # supervised loss
                         loss_dict[key] = record_dict[key] * 1
                     
@@ -1093,8 +1095,8 @@ class ATeacherTrainer(DefaultTrainer):
                     if self.iter < self.cfg.SEMISUPNET.PRETRAIN_STEPS and "dino" not in key:
                         loss_dict[key] *= 0
                     
-                    if loss_dict[key] > 10:
-                        loss_dict[key] = loss_dict[key] / loss_dict[key].item() * 10
+                    # if loss_dict[key] > 10:
+                    #     loss_dict[key] = loss_dict[key] / loss_dict[key].item() * 10
 
             losses = sum(loss_dict.values())
 
