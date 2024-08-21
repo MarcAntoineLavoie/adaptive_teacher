@@ -845,7 +845,7 @@ class ATeacherTrainer(DefaultTrainer):
             if self.use_dino:
                 dino_feat = self.model.dino_head(label_data_q)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
-                if self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0 or self.cfg.INPUT.USE_RANDOM_NOISE:
+                if 0:#self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0 or self.cfg.INPUT.USE_RANDOM_NOISE:
                     mask = self.get_fg_mask_torch(label_data_q, noise_regions=label_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=label_data_q) * self.dino_loss_weight
                 else:
@@ -1032,7 +1032,7 @@ class ATeacherTrainer(DefaultTrainer):
             if self.use_dino:
                 dino_feat = self.model.dino_head(all_label_data)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
-                if self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0 or self.cfg.INPUT.USE_RANDOM_NOISE:
+                if 0:#self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0 or self.cfg.INPUT.USE_RANDOM_NOISE:
                     mask = self.get_fg_mask_torch(all_label_data, noise_regions=label_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=all_label_data) * self.dino_loss_weight
                 else:
@@ -1048,7 +1048,7 @@ class ATeacherTrainer(DefaultTrainer):
             if self.use_dino:
                 dino_feat = self.model.dino_head(all_unlabel_data)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
-                if self.cfg.INPUT.USE_RANDOM_NOISE:
+                if 0:#self.cfg.INPUT.USE_RANDOM_NOISE:
                     mask = self.get_fg_mask_torch(all_unlabel_data, noise_regions=unlabel_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT, has_segm=False)
                     dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=all_unlabel_data) * self.dino_loss_weight_target
                 else:
