@@ -369,12 +369,23 @@ class ATeacherTrainer(DefaultTrainer):
             self.use_dino = False
         
         if type(cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT) == str:
+            self.use_dino_PL = True
             file_in = cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT
             with open(file_in, 'rb') as f_in:
                 temp_dict = pickle.load(f_in)
             self.dino_pseudogt = {}
             for img in temp_dict:
                 self.dino_pseudogt[img['image_id']] = img
+        else:
+            self.use_dino_PL = False
+
+        if type(cfg.SEMISUPNET.DINO_PSEUDOGT_SWAP) == str:
+            assert type(cfg.SEMISUPNET.DINO_PSEUDOGT_SWAP_ITER) == int
+            self.PL_swap = cfg.SEMISUPNET.DINO_PSEUDOGT_SWAP
+            self.PL_swap_iter = cfg.SEMISUPNET.DINO_PSEUDOGT_SWAP_ITER
+        else:
+            self.PL_swap = None
+        
             
         optimizer = self.build_optimizer(cfg, model)
 
@@ -500,7 +511,7 @@ class ATeacherTrainer(DefaultTrainer):
         # self._register_grad_hook()
         # self.activations = []
         # self.gradient = []
-                
+
     def _get_activations_hook(self, module, input, output):
         # self.activations = output
         self.activations.append(output)
@@ -935,7 +946,16 @@ class ATeacherTrainer(DefaultTrainer):
             #  2. Pseudo-labeling
             cur_threshold = self.cfg.SEMISUPNET.BBOX_THRESHOLD
 
-            if not type(self.cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT) == str:
+            swap_PL = False
+            if self.use_dino_PL:
+                if self.PL_swap == 'full':
+                    if self.iter > self.PL_swap_iter:
+                        swap_PL = True
+                elif self.PL_swap == 'half':
+                    if self.iter > self.PL_swap_iter and self.iter % 2:
+                        swap_PL = True
+
+            if not self.use_dino_PL or swap_PL:
                 joint_proposal_dict = {}
                 joint_proposal_dict["proposals_rpn"] = proposals_rpn_unsup_k
                 #Process pseudo labels and thresholding
