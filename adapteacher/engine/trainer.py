@@ -1104,8 +1104,9 @@ class ATeacherTrainer(DefaultTrainer):
                         # import pdb
                         # pdb.set_trace()
                         loss_dict[key] = record_dict[key] * self.cfg.SEMISUPNET.DIS_LOSS_WEIGHT #Need to modify defaults and yaml
-                        if loss_dict[key] > 1:
-                            loss_dict[key] = loss_dict[key] / loss_dict[key].item() * 1
+                        if loss_dict[key] > 0.1:
+                            print(key)
+                            loss_dict[key] = loss_dict[key] / loss_dict[key].item() * 0.1
                     else:  # supervised loss
                         loss_dict[key] = record_dict[key] * 1
                     
