@@ -378,6 +378,8 @@ class ATeacherTrainer(DefaultTrainer):
                 self.dino_pseudogt[img['image_id']] = img
         else:
             self.use_dino_PL = False
+        
+        self.align_only_iter = cfg.SEMISUPNET.DINO_ALIGN_ONLY_UNTIL
 
         if type(cfg.SEMISUPNET.DINO_PSEUDOGT_SWAP) == str:
             assert type(cfg.SEMISUPNET.DINO_PSEUDOGT_SWAP_ITER) == int
@@ -1086,6 +1088,10 @@ class ATeacherTrainer(DefaultTrainer):
 
             # weight losses
             loss_dict = {}
+            if self.iter < self.align_only_iter:
+                unsup_loss_weight = 0
+            else:
+                unsup_loss_weight = self.cfg.SEMISUPNET.UNSUP_LOSS_WEIGHT
             for key in record_dict.keys():
                 if key.startswith("loss"):
                     if torch.isnan(record_dict[key]):
@@ -1096,7 +1102,7 @@ class ATeacherTrainer(DefaultTrainer):
                     elif key[-6:] == "pseudo":  # unsupervised loss
                         loss_dict[key] = (
                             record_dict[key] *
-                            self.cfg.SEMISUPNET.UNSUP_LOSS_WEIGHT
+                            unsup_loss_weight
                         )
                     elif (
                         key == "loss_D_img_s" or key == "loss_D_img_t"
