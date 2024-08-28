@@ -902,23 +902,7 @@ class ATeacherTrainer(DefaultTrainer):
                 unlabel_data_q = self.remove_label(unlabel_data_q)
             unlabel_data_k = self.remove_label(unlabel_data_k)
 
-            #  1. generate the pseudo-label using teacher model
 
-            if 1:
-                with torch.no_grad():
-                    (
-                        _,
-                        proposals_rpn_unsup_k,
-                        proposals_roih_unsup_k,
-                        _,
-                    ) = self.model_teacher(unlabel_data_k, branch="unsup_data_weak")
-            else:
-                (
-                    _,
-                    proposals_rpn_unsup_k,
-                    proposals_roih_unsup_k,
-                    _,
-                ) = self.model_teacher(unlabel_data_k, branch="unsup_data_weak")
                 # single_box = proposals_rpn_unsup_k[0].objectness_logits[0]
                 # single_box.backward()
                 # gradient = self.gradient[0].cpu().data.numpy()  # [C,H,W]
@@ -945,7 +929,6 @@ class ATeacherTrainer(DefaultTrainer):
             # record_dict.update(analysis_pred)
             ######################## For probe END #################################
 
-            #  2. Pseudo-labeling
             cur_threshold = self.cfg.SEMISUPNET.BBOX_THRESHOLD
 
             swap_PL = False
@@ -958,6 +941,16 @@ class ATeacherTrainer(DefaultTrainer):
                         swap_PL = True
 
             if not self.use_dino_PL or swap_PL:
+                #  1. generate the pseudo-label using teacher model
+                with torch.no_grad():
+                    (
+                        _,
+                        proposals_rpn_unsup_k,
+                        proposals_roih_unsup_k,
+                        _,
+                    ) = self.model_teacher(unlabel_data_k, branch="unsup_data_weak")
+
+                #  2. Pseudo-labeling
                 joint_proposal_dict = {}
                 joint_proposal_dict["proposals_rpn"] = proposals_rpn_unsup_k
                 #Process pseudo labels and thresholding
@@ -978,7 +971,6 @@ class ATeacherTrainer(DefaultTrainer):
                 )
                 joint_proposal_dict["proposals_pseudo_roih"] = pesudo_proposals_roih_unsup_k
                 record_dict.update({'iou_overlap':overlap})
-
 
             else:
                 # boxes = self.dino_pseudogt[x['image_id']]['instances_dino'].pred_boxes
@@ -1015,7 +1007,10 @@ class ATeacherTrainer(DefaultTrainer):
             #     a = 1
 
             all_label_data = label_data_q + label_data_k
-            all_unlabel_data = unlabel_data_q
+            if not self.use_dino_PL or swap_PL:
+                all_unlabel_data = unlabel_data_q
+            else:
+                all_unlabel_data = unlabel_data_q + unlabel_data_k
 
             # 4. input both strongly and weakly augmented labeled data into student model
             self.branch = "supervised"
