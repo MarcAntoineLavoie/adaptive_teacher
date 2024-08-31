@@ -27,6 +27,10 @@ load_only_002 = False
 # load_only_002 = True
 
 def _get_cityscapes_files(image_dir, gt_dir):
+    load_only_002 = False
+    if "002" in image_dir:
+        image_dir = image_dir[:-3]
+        load_only_002 = True
     files = []
     # scan through the directory
     cities = PathManager.ls(image_dir)
@@ -304,4 +308,19 @@ def load_ACDC_instances(gt_dir):
     for dict_per_image in data_dict:
         for anno in dict_per_image["annotations"]:
             anno["category_id"] = dataset_id_to_contiguous_id[anno["category_id"]]
+    return data_dict
+
+def load_BDD_instances(gt_dir):
+    with open(gt_dir, 'rb') as fin:
+        data_dict = pickle.load(fin)
+
+    # Map cityscape ids to contiguous ids
+    from cityscapesscripts.helpers.labels import labels
+
+    labels = [l for l in labels if l.hasInstances and not l.ignoreInEval]
+    dataset_id_to_contiguous_id = {l.id: idx for idx, l in enumerate(labels)}
+    for dict_per_image in data_dict:
+        for anno in dict_per_image["annotations"]:
+            anno.pop('segmentation')
+            anno["category_id"] = anno['class_id']
     return data_dict

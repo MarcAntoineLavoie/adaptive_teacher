@@ -387,7 +387,8 @@ class ATeacherTrainer(DefaultTrainer):
             self.PL_swap_iter = cfg.SEMISUPNET.DINO_PSEUDOGT_SWAP_ITER
         else:
             self.PL_swap = None
-        
+
+        self.easy_dino_only = cfg.SEMISUPNET.DINO_ALIGN_EASY_ONLY       
             
         optimizer = self.build_optimizer(cfg, model)
 
@@ -845,7 +846,11 @@ class ATeacherTrainer(DefaultTrainer):
                 record_dict.update(loss_align)
 
             if self.use_dino:
-                dino_feat = self.model.dino_head(label_data_q)
+                if self.easy_dino_only:
+                    easy_feat = self.model.dino_head(label_data_k)
+                    dino_feat = torch.cat([easy_feat,easy_feat])
+                else:
+                    dino_feat = self.model.dino_head(label_data_q)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
                 if 0:#self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0 or self.cfg.INPUT.USE_RANDOM_NOISE:
                     mask = self.get_fg_mask_torch(label_data_q, noise_regions=label_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
@@ -1027,7 +1032,11 @@ class ATeacherTrainer(DefaultTrainer):
                     record_dict.update(record_all_label_data)
 
             if self.use_dino:
-                dino_feat = self.model.dino_head(all_label_data)
+                if self.easy_dino_only:
+                    easy_feat = self.model.dino_head(label_data_k)
+                    dino_feat = torch.cat([easy_feat,easy_feat])
+                else:
+                    dino_feat = self.model.dino_head(all_label_data)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
                 if 0:#self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0 or self.cfg.INPUT.USE_RANDOM_NOISE:
                     mask = self.get_fg_mask_torch(all_label_data, noise_regions=label_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
@@ -1043,6 +1052,11 @@ class ATeacherTrainer(DefaultTrainer):
                 all_unlabel_data, branch="supervised_target", #use_gt_only=self.use_gt_proposals_only
             )
             if self.use_dino:
+                if self.easy_dino_only and len(all_unlabel_data) > len(unlabel_data_k):
+                    easy_feat = self.model.dino_head(unlabel_data_k)
+                    dino_feat = torch.cat([easy_feat,easy_feat])
+                else:
+                    dino_feat = self.model.dino_head(all_unlabel_data)
                 dino_feat = self.model.dino_head(all_unlabel_data)
                 cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], dino_feat)
                 if 0:#self.cfg.INPUT.USE_RANDOM_NOISE:

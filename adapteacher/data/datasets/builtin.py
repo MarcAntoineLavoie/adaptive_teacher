@@ -8,7 +8,7 @@ from iopath.common.file_io import PathManager
 
 from detectron2.data.datasets.pascal_voc import register_pascal_voc
 from detectron2.data.datasets.builtin_meta import _get_builtin_metadata
-from .cityscapes_foggy import load_cityscapes_instances, load_ACDC_instances
+from .cityscapes_foggy import load_cityscapes_instances, load_ACDC_instances, load_BDD_instances
 import io
 import logging
 
@@ -118,6 +118,7 @@ _RAW_CITYSCAPES_SPLITS = {
     "cityscapes_foggy_train": ("cityscapes_foggy/leftImg8bit/train/", "cityscapes_foggy/gtFine/train/"),
     "cityscapes_foggy_val": ("cityscapes_foggy/leftImg8bit/val/", "cityscapes_foggy/gtFine/val/"),
     "cityscapes_foggy_test": ("cityscapes_foggy/leftImg8bit/test/", "cityscapes_foggy/gtFine/test/"),
+    "cityscapes_foggy_val002": ("cityscapes_foggy/leftImg8bit/val/002", "cityscapes_foggy/gtFine/val/"),
     "cityscapes_train": ("cityscapes/leftImg8bit/train/", "cityscapes/gtFine/train/"),
     "cityscapes_val": ("cityscapes/leftImg8bit/val/", "cityscapes/gtFine/val/"),
     "cityscapes_test": ("cityscapes/leftImg8bit/test/", "cityscapes/gtFine/test/"),
@@ -198,6 +199,7 @@ _RAW_ACDC_SPLITS = {
     "ACDC_val_snow": ("acdc/rgb_anon_trainvaltest/rgb_anon/snow/val/", "acdc/gt_detection_trainval/gt_detection/snow/val/"),
     "ACDC_train_all": ("acdc/rgb_anon_trainvaltest/rgb_anon/all/train/", "acdc/gt_detection_trainval/gt_detection/all/train/"),
     "ACDC_val_all": ("acdc/rgb_anon_trainvaltest/rgb_anon/all/val/", "acdc/gt_detection_trainval/gt_detection/all/val/"),
+    "ACDC_train_full": ("acdc/rgb_anon_trainvaltest/rgb_anon/all/train_full/", "acdc/gt_detection_trainval/gt_detection/all/full/"),
 }
 
 
@@ -214,8 +216,28 @@ def register_ACDC(root):
             image_dir=image_dir, gt_dir=gt_dir, evaluator_type="coco", **meta
         )
 
+_RAW_BDD_SPLITS = {
+    "BDD_day_train": ("bdd/images/train/day/", "bdd/labels/train/day/img_annos.pkl"),
+    "BDD_day_val": ("bdd/images/val/day/", "bdd/labels/val/day/img_annos.pkl"),
+    # "BDD_daysunny_train": ("diverse_weather/Daytime_Sunny/daytime_clear/VOC2007/JPEGImages/", "diverse_weather/Daytime_Sunny/daytime_clear/VOC2007/ImageSets/Main/train.txt_annots.pkl"),
+    # "BDD_daysunny_val": ("diverse_weather/Daytime_Sunny/daytime_clear/VOC2007/JPEGImages/", "diverse_weather/Daytime_Sunny/daytime_clear/VOC2007/ImageSets/Main/test.txt_annots.pkl"),
+}
+
+def register_BDD(root):
+    for key, (image_dir, gt_file) in _RAW_BDD_SPLITS.items():
+        meta = _get_builtin_metadata("cityscapes")
+        image_dir = os.path.join(root, image_dir)
+        gt_file = os.path.join(root, gt_file)
+
+        inst_key = key
+        DatasetCatalog.register(inst_key, lambda x=gt_file: load_BDD_instances(x),)
+        MetadataCatalog.get(inst_key).set(
+            image_dir=image_dir, gt_dir=gt_file, evaluator_type="coco", **meta
+        )
+
 register_all_cityscapes_foggy(_root)
 register_all_clipart(_root)
 register_all_water(_root)
 register_ACDC(_root)
+register_BDD(_root)
 

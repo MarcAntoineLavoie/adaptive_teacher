@@ -38,6 +38,32 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
                         pass
             return incompatible
 
+        elif all("vgg" in x for x in checkpoint["model"].keys()):
+            # pretrained vgg weights, update student model
+            model_state_dict = self.model.modelStudent.state_dict()
+            renamed_ckpt = align_and_update_state_dicts(
+                model_state_dict,
+                checkpoint["model"],
+                c2_conversion=checkpoint.get("__author__", None) == "Caffe2",
+            )
+            # checkpoint["model"] = model_state_dict
+            checkpoint["model"] = renamed_ckpt
+
+            # for non-caffe2 models, use standard ways to load it
+            incompatible = self._load_student_model(checkpoint)
+
+            model_buffers = dict(self.model.modelStudent.named_buffers(recurse=False))
+            for k in ["pixel_mean", "pixel_std"]:
+                # Ignore missing key message about pixel_mean/std.
+                # Though they may be missing in old checkpoints, they will be correctly
+                # initialized from config anyway.
+                if k in model_buffers:
+                    try:
+                        incompatible.missing_keys.remove(k)
+                    except ValueError:
+                        pass
+            return incompatible
+
         else:  # whole model
             if checkpoint.get("matching_heuristics", False):
                 self._convert_ndarray_to_tensor(checkpoint["model"])
