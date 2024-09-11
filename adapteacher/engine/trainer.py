@@ -42,7 +42,7 @@ import copy
 
 from detectron2.evaluation import (
     DatasetEvaluator,
-    inference_on_dataset,
+    #inference_on_dataset,
     print_csv_format,
     verify_results,
 )
@@ -766,6 +766,84 @@ class ATeacherTrainer(DefaultTrainer):
                 label_list.append(copy.deepcopy(label_datum["instances"]))
         
         return label_list
+    
+    def test_with_gen(self, cfg, model, evaluators=None, gen_labels=False, gen_dir=''):
+        """
+        Evaluate the given model. The given model is expected to already contain
+        weights to evaluate.
+
+        Args:
+            cfg (CfgNode):
+            model (nn.Module):
+            evaluators (list[DatasetEvaluator] or None): if None, will call
+                :meth:`build_evaluator`. Otherwise, must have the same length as
+                ``cfg.DATASETS.TEST``.
+            gen_labels: if True, saves generated proposals to file
+            gen_dir: path to save generated proposals
+
+        Returns:
+            dict: a dict of result metrics
+        """
+        logger = logging.getLogger(__name__)
+        if isinstance(evaluators, DatasetEvaluator):
+            evaluators = [evaluators]
+        if evaluators is not None:
+            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(
+                len(cfg.DATASETS.TEST), len(evaluators)
+            )
+
+        results = OrderedDict()
+        for idx, dataset_name in enumerate(cfg.DATASETS.TEST):
+            data_loader = self.build_test_loader(cfg, dataset_name)
+            print(idx)
+            if idx > 10:
+                print('done')
+                break
+            # When evaluators are passed in as arguments,
+            # implicitly assume that evaluators can be created before data_loader.
+            if evaluators is not None:
+                evaluator = evaluators[idx]
+            else:
+                try:
+                    evaluator = self.build_evaluator(cfg, dataset_name)
+                except NotImplementedError:
+                    logger.warn(
+                        "No evaluator found. Use `DefaultTrainer.test(evaluators=)`, "
+                        "or implement its `build_evaluator` method."
+                    )
+                    results[dataset_name] = {}
+                    continue
+            name_split = dataset_name.split('_')
+            if name_split[0] == 'ACDC' and name_split[1] == 'train' and gen_labels:
+                output_file = gen_dir + 'dino_anno_{}.pkl'.format(dataset_name)
+                results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
+                with open(output_file, 'wb') as f_out:
+                    pickle.dump(outputs, f_out)
+            if name_split[0] == 'cityscapes' and name_split[-1] == 'train' and gen_labels:
+                output_file = gen_dir + 'dino_anno_{}.pkl'.format(dataset_name)
+                results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
+                with open(output_file, 'wb') as f_out:
+                    pickle.dump(outputs, f_out)
+            if name_split[0] == 'BDD' and name_split[-1] == 'train' and gen_labels:
+                output_file = gen_dir + 'dino_anno_{}.pkl'.format(dataset_name)
+                results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
+                with open(output_file, 'wb') as f_out:
+                    pickle.dump(outputs, f_out)
+            else:
+                results_i = inference_on_dataset(model, data_loader, evaluator)
+            results[dataset_name] = results_i
+            if comm.is_main_process():
+                assert isinstance(
+                    results_i, dict
+                ), "Evaluator must return a dict on the main process. Got {} instead.".format(
+                    results_i
+                )
+                logger.info("Evaluation results for {} in csv format:".format(dataset_name))
+                print_csv_format(results_i)
+
+        if len(results) == 1:
+            results = list(results.values())[0]
+        return results
     
     # def get_label_test(self, label_data):
     #     label_list = []
@@ -2360,7 +2438,7 @@ def temp_plots():
     from detectron2.utils.visualizer import Visualizer
     names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
     curr_id = 0
-    curr_data = label_data_k
+    curr_data = unlabel_data_k
     # curr_data = all_label_data
     img_ = curr_data[curr_id]['image'].transpose(0,1).transpose(1,2)
 
@@ -3037,3 +3115,212 @@ def temp123():
 
 def tens2img(x):
     return x.transpose(0,1).transpose(1,2).cpu().numpy()[:,:,[2,1,0]]
+
+
+    # import matplotlib.pyplot as plt
+    # import matplotlib
+    # from detectron2.utils.visualizer import Visualizer
+    # names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
+    # curr_id = 0
+    # curr_data = unlabel_data_k
+    # # curr_data = all_label_data
+    # img_ = curr_data[curr_id]['image'].transpose(0,1).transpose(1,2)
+
+    # test_v = Visualizer(img_[:, :, [2,1,0]])
+    # temp = curr_data[curr_id]['instances'].gt_boxes
+    # labels = [names[x] for x in curr_data[curr_id]['instances'].gt_classes.tolist()]
+    # temp2 = gt_unlabel_k[curr_id].gt_boxes
+    # labels2 = [names[x] for x in gt_unlabel_k[curr_id].gt_classes.tolist()]
+    # # temp = proposals_roih_unsup_k[curr_id].pred_boxes
+    # temp.tensor = temp.tensor.cpu()
+    # test_v.overlay_instances(boxes=temp, labels=labels)
+    # img = test_v.get_output().get_image()
+    # test_v2 = Visualizer(img_[:, :, [2,1,0]])
+    # temp2.tensor = temp2.tensor.cpu()
+    # test_v2.overlay_instances(boxes=temp2, labels=labels2)
+    # img2 = test_v2.get_output().get_image()
+
+# def test1245(a):
+#     self.model = self.model.eval()
+#     from PIL import Image 
+#     with torch.no_grad():
+        
+#         image_path = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes/leftImg8bit/train/aachen/aachen_000010_000019_leftImg8bit.png'
+#         img1_ = np.array(Image.open(image_path).resize((1596,798)))
+#         img1_[392:406,490:504,:] = [255,100,200]
+#         img1 = torch.tensor(img1_)[:,:798,[2,1,0]].transpose(1,2).transpose(0,1)
+#         # image_path = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/leftImg8bit/train/aachen/aachen_000012_000019_leftImg8bit_foggy_beta_0.02.png'
+#         image_path = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/bdd/images/train/0a3e70d1-a515ffaf.jpg'
+#         img2_ = np.array(Image.open(image_path).resize((1596,798)))
+#         img2 = torch.tensor(img2_)[:,-798:,[2,1,0]].transpose(1,2).transpose(0,1)
+#         img_dict = [{'image':img1},{'image':img2}]
+#         dino_feat = self.model.dino_head(img_dict).detach().cpu()
+#         cnn_feat = self.model.backbone(self.model.preprocess_image(img_dict).tensor)['res5'].detach().cpu()
+#         ndino = torch.nn.functional.normalize(dino_feat,dim=1).transpose(1,3).transpose(1,2)
+#         ncnn = torch.nn.functional.normalize(dino_feat,dim=1).transpose(1,3).transpose(1,2)
+#         point = ndino[0,28,35,:]
+#         dino2 = (ndino*point).sum(dim=-1).numpy()
+#         pointc = ncnn[0,25,32,:]
+#         cnn2 = (ncnn*pointc).sum(dim=-1).numpy()
+
+
+#         plt.figure()
+#         plt.imshow(dino2[0,:,:])
+#         plt.figure()
+#         plt.imshow(img1_[:,:798,:])
+#         plt.figure()
+#         plt.imshow(dino2[1,:,:])
+#         plt.figure()
+#         plt.imshow(img1_[:,-798:,:])
+
+#         plt.rcParams["font.family"] = "serif"
+#         plt.rcParams.update({'font.size': 14})
+#         fig, axs = plt.subplots(2,2)
+#         axs[0,0].imshow(img1_[:,:798,:])
+#         axs[0,1].imshow(img2_[:,-798:,:])
+#         axs[1,0].imshow(dino2[0,:,:])
+#         axs[1,1].imshow(dino2[1,:,:])
+#         axs[0,0].set_axis_off()
+#         axs[0,1].set_axis_off()
+#         axs[1,0].set_axis_off()
+#         axs[1,1].set_axis_off()
+#         axs[0,0].set_title('Cityscapes')
+#         axs[0,1].set_title('BDD100k')
+#         plt.show()
+
+#         plt.figure()
+#         plt.imshow(dino2[1,:,:],vmax=1)
+#         plt.figure()
+#         plt.imshow(cnn2[0,:,:])
+#         plt.figure()
+#         plt.imshow(cnn2[1,:,:],vmax=1)
+#         plt.show()
+    
+
+#     cnn_rescale_feat = self.model.dino_align(cnn_feat, dino_feat)
+#     curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size,cnn_dims=cnn_feat.shape[2:], box_mask=use_bbox)[0]
+#     curr_feats = [(dino_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
+#     curr_feats_cnn = [(cnn_feat.detach().cpu().numpy()*x[-1]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
+#     curr_feats_cnn_project = [(cnn_rescale_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
+
+
+from typing import List, Union
+def inference_on_dataset(
+    model, data_loader, evaluator: Union[DatasetEvaluator, List[DatasetEvaluator], None], get_outs=False
+):
+    """
+    Run model on the data_loader and evaluate the metrics with evaluator.
+    Also benchmark the inference speed of `model.__call__` accurately.
+    The model will be used in eval mode.
+
+    Args:
+        model (callable): a callable which takes an object from
+            `data_loader` and returns some outputs.
+
+            If it's an nn.Module, it will be temporarily set to `eval` mode.
+            If you wish to evaluate a model in `training` mode instead, you can
+            wrap the given model and override its behavior of `.eval()` and `.train()`.
+        data_loader: an iterable object with a length.
+            The elements it generates will be the inputs to the model.
+        evaluator: the evaluator(s) to run. Use `None` if you only want to benchmark,
+            but don't want to do any evaluation.
+
+    Returns:
+        The return value of `evaluator.evaluate()`
+    """
+    num_devices = get_world_size()
+    logger = logging.getLogger(__name__)
+    logger.info("Start inference on {} batches".format(len(data_loader)))
+
+    total = len(data_loader)  # inference data loader must have a fixed length
+    if evaluator is None:
+        # create a no-op evaluator
+        evaluator = DatasetEvaluators([])
+    if isinstance(evaluator, abc.MutableSequence):
+        evaluator = DatasetEvaluators(evaluator)
+    evaluator.reset()
+
+    num_warmup = min(5, total - 1)
+    start_time = time.perf_counter()
+    total_data_time = 0
+    total_compute_time = 0
+    total_eval_time = 0
+    with ExitStack() as stack:
+        if isinstance(model, nn.Module):
+            stack.enter_context(inference_context(model))
+        stack.enter_context(torch.no_grad())
+
+        start_data_time = time.perf_counter()
+        if get_outs:
+            output_list = []
+        for idx, inputs in enumerate(data_loader):
+            total_data_time += time.perf_counter() - start_data_time
+            if idx == num_warmup:
+                start_time = time.perf_counter()
+                total_data_time = 0
+                total_compute_time = 0
+                total_eval_time = 0
+
+            start_compute_time = time.perf_counter()
+            outputs = model(inputs)
+            if get_outs:
+                instances = Instances(outputs[0]['instances'].image_size)
+                instances.pred_boxes = outputs[0]['instances'].pred_boxes.tensor.cpu()
+                instances.scores = outputs[0]['instances'].scores.cpu()
+                instances.pred_classes = outputs[0]['instances'].pred_classes.cpu()
+                out_dict = {'file_name':inputs[0]['file_name'], 'image_id':inputs[0]['image_id'], 'height':inputs[0]['height'], 'width':inputs[0]['width'], 'instances_dino':instances}
+                output_list.append(out_dict)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            total_compute_time += time.perf_counter() - start_compute_time
+
+            start_eval_time = time.perf_counter()
+            evaluator.process(inputs, outputs)
+            total_eval_time += time.perf_counter() - start_eval_time
+
+            iters_after_start = idx + 1 - num_warmup * int(idx >= num_warmup)
+            data_seconds_per_iter = total_data_time / iters_after_start
+            compute_seconds_per_iter = total_compute_time / iters_after_start
+            eval_seconds_per_iter = total_eval_time / iters_after_start
+            total_seconds_per_iter = (time.perf_counter() - start_time) / iters_after_start
+            if idx >= num_warmup * 2 or compute_seconds_per_iter > 5:
+                eta = datetime.timedelta(seconds=int(total_seconds_per_iter * (total - idx - 1)))
+                log_every_n_seconds(
+                    logging.INFO,
+                    (
+                        f"Inference done {idx + 1}/{total}. "
+                        f"Dataloading: {data_seconds_per_iter:.4f} s/iter. "
+                        f"Inference: {compute_seconds_per_iter:.4f} s/iter. "
+                        f"Eval: {eval_seconds_per_iter:.4f} s/iter. "
+                        f"Total: {total_seconds_per_iter:.4f} s/iter. "
+                        f"ETA={eta}"
+                    ),
+                    n=5,
+                )
+            start_data_time = time.perf_counter()
+
+    # Measure the time only for this worker (before the synchronization barrier)
+    total_time = time.perf_counter() - start_time
+    total_time_str = str(datetime.timedelta(seconds=total_time))
+    # NOTE this format is parsed by grep
+    logger.info(
+        "Total inference time: {} ({:.6f} s / iter per device, on {} devices)".format(
+            total_time_str, total_time / (total - num_warmup), num_devices
+        )
+    )
+    total_compute_time_str = str(datetime.timedelta(seconds=int(total_compute_time)))
+    logger.info(
+        "Total inference pure compute time: {} ({:.6f} s / iter per device, on {} devices)".format(
+            total_compute_time_str, total_compute_time / (total - num_warmup), num_devices
+        )
+    )
+
+    results = evaluator.evaluate()
+    # An evaluator may return None when not in main process.
+    # Replace it by an empty dict instead to make it easier for downstream code to handle
+    if results is None:
+        results = {}
+    if get_outs:
+        return results, output_list
+    else:
+        return results
