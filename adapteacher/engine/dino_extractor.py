@@ -134,6 +134,8 @@ class DinoAlignHead(nn.Module):
                                                    nn.Conv2d(self.proj_dim, self.proj_dim, 1, 1),
                                                    nl_layer,
                                                    nn.Conv2d(self.proj_dim, dino_dim, 1, 1))
+        elif head_type=='integrated':
+            self.projection_layer = nn.Identity()
         else:
             self.projection_layer = nn.Conv2d(cnn_dim, dino_dim, 1, 1)
         

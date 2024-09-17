@@ -94,6 +94,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         dis_type: str,
         align_proposals: bool,
         # dis_loss_weight: float = 0,
+        proj_type: str,
     ):
         """
         Args:
@@ -136,6 +137,13 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         else:
             self.roi_heads.align_proposals = False
 
+        if proj_type == 'integrated':
+            self.integrated_proj = True
+            in_dims = self.backbone.output_shape()[dis_type].channels
+            self.proj_layer = nn.Sequential(nn.ReLU(), nn.Conv2d(in_dims, 768, 1, 1))
+        else:
+            self.integrated_proj = False
+
     def build_discriminator(self):
         self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]).to(self.device) # Need to know the channel
 
@@ -153,6 +161,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             "dis_type": cfg.SEMISUPNET.DIS_TYPE,
             # "dis_loss_ratio": cfg.xxx,
             "align_proposals": cfg.SEMISUPNET.ALIGN_PROPOSALS,
+            "proj_type": cfg.SEMISUPNET.DINO_HEAD
         }
 
     def preprocess_image_train(self, batched_inputs: List[Dict[str, torch.Tensor]]):
@@ -249,6 +258,8 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             gt_instances = None
 
         features = self.backbone(images.tensor)
+        if self.integrated_proj:
+            pass
         # if self.dis_type == 'res4':
         #     features = {key: features[key]/1000 for key in features.keys()}
 
