@@ -99,8 +99,12 @@ def add_ateacher_config(cfg):
     _C.SEMISUPNET.TRUNK_SCALE = 1.0
     # _C.SEMISUPNET.SCALE_LOC_LOSS_SOURCE = 1.0
     # _C.SEMISUPNET.SCALE_LOC_LOSS_TARGET = 1.0
+    _C.SEMISUPNET.DINO_SAM_MASK = False
 
     # _C.NEW_ALLOWED = True
+
+    # _C.SEMISUPNET.CONTRASTIVE = True
+    # _C.SEMISUPNET.CONTRASTIVE_LOSS_WEIGHT = 0.05
 
     # dataloader
     # supervision level

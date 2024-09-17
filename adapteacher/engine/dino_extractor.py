@@ -8,6 +8,7 @@ from dinov2.hub.backbones import dinov2_vits14, dinov2_vitb14, dinov2_vitl14, di
 from PIL import Image
 from detectron2.structures.masks import polygons_to_bitmask, BitMasks, PolygonMasks
 import detectron2.utils.comm as comm
+from pycocotools import mask as coco_mask
 
 class dino_preprocessing():
     """
@@ -113,6 +114,7 @@ class DinoAlignHead(nn.Module):
         super(DinoAlignHead, self).__init__()
         head_type = cfg.SEMISUPNET.DINO_HEAD
         self.instance_masks = cfg.SEMISUPNET.DINO_INSTANCE_MASK
+        self.SAM_masks = cfg.SEMISUPNET.DINO_SAM_MASK
         self.loss_type = cfg.SEMISUPNET.DINO_ALIGN_LOSS
         self.normalize_feature = normalize_feature
         self.proj_dim = cfg.SEMISUPNET.DINO_PROJ_DIM
@@ -191,6 +193,28 @@ class DinoAlignHead(nn.Module):
                 cnn_instances = torch.cat(cnn_instances,dim=0)
                 sim = torch.linalg.norm(dino_instances-cnn_instances, dim=1, ord=2)
                 loss = sim.mean() / 100
+        elif self.SAM_masks and gt_data is not None:
+            device = feat_cnn.device
+            dino_instances = []
+            cnn_instances = []
+            for idx, rlemasks in enumerate(gt_data):
+                masks = torch.tensor(np.vstack([coco_mask.decode(x) for x in rlemasks['masks']]).astype(float))
+                h,w = masks.shape[1:]
+                scaled_masks = torch.nn.functional.interpolate(gt_masks.unsqueeze(1),size=feat_dino.shape[2:],mode='bicubic',antialias=True)
+                ids = torch.where(scaled_masks.squeeze(1).sum(1).sum(1))[0]
+                scaled_masks = scaled_masks[ids,:,:,:].to(device=feat_dino.device)
+                dino_instances.append((scaled_masks * feat_dino[idx,:,:,:]).sum(dim=2).sum(dim=2))
+                cnn_instances.append((scaled_masks * feat_cnn[idx,:,:,:]).sum(dim=2).sum(dim=2))
+            if self.normalize_feature:
+                dino_instances = torch.nn.functional.normalize(torch.cat(dino_instances), dim=1)
+                cnn_instances = torch.nn.functional.normalize(torch.cat(cnn_instances), dim=1)
+                if self.loss_type == 'similarity':
+                    sim = torch.matmul(cnn_instances.unsqueeze(-2), dino_instances.unsqueeze(-1))
+                    loss = (1-sim).mean()
+                elif self.loss_type == "contrast":
+                    loss, sim = self.contrast_loss(dino_instances, cnn_instances)
+                    # scaled_masks = [torch.nn.functional.interpolate(x.float().unsqueeze(0).unsqueeze(0),size=feat_dino.shape,mode='bicubic',antialias=True) for x in img['instances'].gt_masks]
+                    # dino_feats = [feat_dino[id,:,:,:]*mask for mask in ]
         else:
             if self.normalize_feature:
                 feat_cnn = feat_cnn.permute((0,2,3,1))
