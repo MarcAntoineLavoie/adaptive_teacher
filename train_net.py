@@ -44,6 +44,7 @@ def setup(args):
     cfg.set_new_allowed(True)
     add_ateacher_config(cfg)
     if args.use_old_cfg: #os.path.isfile('/'.join([os.getcwd(),args.output_dir,'config.yaml'])):
+        cfg.SEMISUPNET.set_new_allowed(True)
         cfg.merge_from_file('/'.join([args.output_dir,'config.yaml']))
         cfg.OUTPUT_DIR = args.output_dir
         cfg.SOLVER.IMG_PER_BATCH_LABEL = 2
@@ -53,6 +54,7 @@ def setup(args):
         # cfg.DATASETS.TEST = ("cityscapes_val",)
         cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_rain")
     else:
+        cfg.SEMISUPNET.set_new_allowed(True)
         cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     # cfg = scale_configs(cfg)
@@ -64,7 +66,17 @@ def setup(args):
         cfg.DATASETS.TRAIN_UNLABEL = ("ACDC_train_{}".format(args.acdc_type),)
     # cfg.DATASETS.TRAIN_UNLABEL = ("cityscapes_foggy_train")
     # cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_fog","ACDC_val_night","ACDC_val_rain","ACDC_val_snow")
+    # cfg.DATASETS.TEST = ("cityscapes_val","cityscapes_foggy_val","ACDC_train_fog","ACDC_train_night","ACDC_train_rain","ACDC_train_snow")
+    # cfg.DATASETS.TEST = ("ACDC_train_fog","ACDC_train_night","ACDC_train_rain","ACDC_train_snow")
+    # cfg.DATASETS.TEST = ("ACDC_val_all",)
+    # cfg.DATASETS.TEST = ("cityscapes_foggy_val002",)
+    # cfg.DATASETS.TEST = ("cityscapes_foggy_val",)
+    # cfg.DATASETS.TEST = ("BDD_day_val",)
+    # cfg.DATASETS.TEST = ("BDD_day_train",)
+    # cfg.DATASETS.TEST = ("cityscapes_foggy_train",)
     # cfg.INPUT.MIN_SIZE_TRAIN = (800,)
+    # cfg.SEMISUPNET.USE_DINO = False
+    cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT = None
     if cfg.SEMISUPNET.DINO_BASE:
         scale = cfg.INPUT.DINO_PATCH_SIZE
         if cfg.INPUT.MAX_SIZE_TEST % scale:
@@ -194,6 +206,8 @@ if __name__ == "__main__":
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_test_small.yaml'
     # args.config_file = './configs/faster_rcnn_R101_cross_clipart_v2.yaml'
     # args.config_file = './configs/faster_rcnn_RES_cross_city_tiny.yaml'
+    # args.config_file = './configs/faster_rcnn_DINO_test.yaml'
+    # args.config_file = './configs/faster_rcnn_2trunks.yaml'
     # args.resume = False
     args.resume = True
 
@@ -236,6 +250,19 @@ if __name__ == "__main__":
     # args.output_dir = '/media/marc/data_checks1/results_dino/resnet/dino_twin_pretrain1/'
     # args.output_dir = '/media/marc/data_checks1/results_dino/resnet/dino_twin_resnet50_100_mlp_c4_v1/'
     # args.output_dir = '/media/marc/data_checks1/results_dino/resnet/dino_twin_resnet50_500_mlp_pretrain_masks_c5_v2/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/resnet/dino_twin_resnet50_100_mlp3_L1_v1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/resnet/dino_twin_resnet50_100_mlp_masks_contrast_c5_v4/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/resnet/dino_twin_resnet50_100_mlp_masks_contrast_filter_c5_v4/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/dino_head/dino_twin_dinov2_nom_vitl_v1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/dino_head/dino_twin_dinov2_nom_v1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/resnet/dino_twin_resnet50_sim_acdcnight_mlp100_real_v1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/vgg/dino_twin_vgg_cityfog_sim5k_dinogt20k_v1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/vgg/dino_twin_vgg_cityfog_noalign_dinogt20k_half_v1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/bdd/dino_twin_vgg_bdd_noalign_dinogt20k_half_v1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/vgg/dino_twin_vgg_cityfog_align5k_dinogt20k_half_easyweights_v1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/dino_head/dino_twin_resnet50_cityfog_sim5k_dinogt20k_v1/'
+    # args.output_dir = '/media/marc/data_checks1/results_dino/cityfog/bl20k'
+
 
     # args.use_old_cfg = True
     args.use_old_cfg = False

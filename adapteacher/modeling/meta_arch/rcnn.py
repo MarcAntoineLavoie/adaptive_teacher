@@ -244,20 +244,23 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
 
                 features = self.backbone(images_s.tensor)
                 if self.integrated_proj:
-                    features[self.dis_type] = self.proj_layer(features[self.dis_type])
+                    new_feat = self.proj_layer(features[self.dis_type])
+                    features_s = grad_reverse(new_feat)
+                else:
+                    features_s = grad_reverse(features[self.dis_type])
 
                 # import pdb
                 # pdb.set_trace()
             
-                features_s = grad_reverse(features[self.dis_type])
                 D_img_out_s = self.D_img(features_s)
                 loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
 
                 features_t = self.backbone(images_t.tensor)
                 if self.integrated_proj:
-                    features_t[self.dis_type] = self.proj_layer(features_t[self.dis_type])
-                
-                features_t = grad_reverse(features_t[self.dis_type])
+                    new_feat_t = self.proj_layer(features_t[self.dis_type])
+                    features_t = grad_reverse(new_feat_t)
+                else:
+                    features_t = grad_reverse(features_t[self.dis_type])
                 # features_t = grad_reverse(features_t['p2'])
                 D_img_out_t = self.D_img(features_t)
                 loss_D_img_t = F.binary_cross_entropy_with_logits(D_img_out_t, torch.FloatTensor(D_img_out_t.data.size()).fill_(target_label).to(self.device))
@@ -278,9 +281,16 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         else:
             gt_instances = None
 
-        features = self.backbone(images.tensor)
+        features_ = self.backbone(images.tensor)
+        features = {}
         if self.integrated_proj:
-            features[self.dis_type] = self.proj_layer(features[self.dis_type])
+            features[self.dis_type] = self.proj_layer(features_[self.dis_type])
+        else:
+            features[self.dis_type] = features_[self.dis_type]
+        # features = self.backbone(images.tensor)
+        # if self.integrated_proj:
+        #     features[self.dis_type] = self.proj_layer(features[self.dis_type])
+
         # if self.dis_type == 'res4':
         #     features = {key: features[key]/1000 for key in features.keys()}
 
@@ -316,6 +326,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             losses.update(detector_losses)
             losses.update(proposal_losses)
             losses["loss_D_img_s"] = loss_D_img_s*0.001
+            #print([x.item() for x in proposal_losses.values()])
             return losses, [], [], None
 
         elif branch == "supervised_target":
@@ -453,9 +464,12 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         assert not self.training
 
         images = self.preprocess_image(batched_inputs)
-        features = self.backbone(images.tensor)
+        features_ = self.backbone(images.tensor)
+        features = {}
         if self.integrated_proj:
-            features[self.dis_type] = self.proj_layer(features[self.dis_type])
+            features[self.dis_type] = self.proj_layer(features_[self.dis_type])
+        else:
+            features[self.dis_type] = features_[self.dis_type]
 
         if detected_instances is None:
             if self.proposal_generator is not None:

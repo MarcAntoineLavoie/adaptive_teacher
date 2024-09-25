@@ -367,23 +367,8 @@ class ATeacherTrainer(DefaultTrainer):
             model.dino_align = model.dino_align.to((torch.device(cfg.MODEL.DEVICE)))
             self.dino_sam_masks = cfg.SEMISUPNET.DINO_SAM_MASK
             if cfg.SEMISUPNET.DINO_SAM_MASK:
-                data_root = './datasets'
-                label_data_mask_file = './datasets/cityscapes/leftImg8bit/train/sam_masks.pkl'
-                with open(label_data_mask_file, 'rb') as f_in:
-                    self.label_data_masks = pickle.load(f_in)
-                if 'city' in cfg.DATASETS.TRAIN_UNLABEL[0]:
-                    split = '_RAW_CITYSCAPES_SPLITS'
-                elif 'ACDC' in cfg.DATASETS.TRAIN_UNLABEL[0]:
-                    split = '_RAW_ACDC_SPLITS'
-                elif 'BDD' in cfg.DATASETS.TRAIN_UNLABEL[0]:
-                    split = '_RAW_BDD_SPLITS'
-                # unlabel_data_mask_file = '/'.join([data_root,DatasetCatalog['ACDC_val_rain'].__globals__[split][cfg.DATASETS.TRAIN_UNLABEL[0]][0][:-1], 'sam_masks.pkl'])
-                unlabel_data_mask_file = './datasets/bdd/images/sam_masks.pkl'
-                with open(unlabel_data_mask_file, 'rb') as f_in:
-                    self.unlabel_data_masks = pickle.load(f_in)
-                #  label_data_mask_file = '/'.join([data_root,DatasetCatalog['ACDC_val_rain'].__globals__[split][cfg.DATASETS.TRAIN_LABEL[0]][0], 'sam_masks.pkl'])
-                # with open(label_data_mask_file, 'rb') as f_in:
-                    # self.label_data_masks = pickle.load(f_in)                   
+                self.label_data_masks = './datasets/cityscapes/leftImg8bit/train/decoded_masks/'
+                self.unlabel_data_masks = './datasets/bdd/images/decoded_masks/'              
                 
         else:
             self.use_dino = False
@@ -955,9 +940,12 @@ class ATeacherTrainer(DefaultTrainer):
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=label_data_q) * self.dino_loss_weight
                 elif self.dino_sam_masks:
                     file_names = [x['file_name'].rsplit('/',1)[1] for x in label_data_q]
-                    rle_masks = [x['masks'] for x in self.label_data_masks if x['file_name'] in file_names]
-                    rle_masks += rle_masks
-                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=rle_masks) * self.dino_loss_weight    
+                    mask_files = [self.label_data_masks + x for x in file_names]
+                    sam_masks = [np.array(Image.open(x)) for x in mask_files]
+                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=sam_masks) * self.dino_loss_weight
+                    # rle_masks = [x['masks'] for x in self.label_data_masks if x['file_name'] in file_names]
+                    # rle_masks += rle_masks
+                    # dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=rle_masks) * self.dino_loss_weight    
                 else:
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=label_data_q) * self.dino_loss_weight
                 record_dict['loss_dino'] = dino_loss
@@ -3238,6 +3226,43 @@ def tens2img(x):
 #     curr_feats = [(dino_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
 #     curr_feats_cnn = [(cnn_feat.detach().cpu().numpy()*x[-1]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
 #     curr_feats_cnn_project = [(cnn_rescale_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
+
+
+def img_boxes():
+    import matplotlib.pyplot as plt
+    import matplotlib
+    import torch
+    import numpy as np
+    from detectron2.utils.visualizer import Visualizer
+    from detectron2.structures.boxes import Boxes
+    from detectron2.structures.instances import Instances
+    from cityscapesscripts.helpers.labels import labels
+    # image_path = './datasets/acdc/rgb_anon_trainvaltest/rgb_anon/snow/train/GP010607/GP010607_frame_000702_rgb_anon.png'
+    # gt_path = '/media/marc/data_checks1/acdc/gt_detection_trainval/gt_detection/snow/train/img_anno'
+    image_path = 'datasets/cityscapes/leftImg8bit/train/hanover/hanover_000000_007897_leftImg8bit.png'
+    gt_path = '/home/marc/Documents/trailab_work/detectron2/detectron2/data/cityscapes_dict.pkl' 
+    from PIL import Image
+    img1_ = torch.tensor(np.array(Image.open(image_path)))
+    h,w,c = img1_.shape
+    import pickle
+    with open(gt_path, 'rb') as fin:
+        data = pickle.load(fin)
+
+    image_boxes = [x['annotations'] for x in data if x['file_name'] == image_path][0]
+    labels = [l for l in labels if l.hasInstances and not l.ignoreInEval]
+    dataset_id_to_contiguous_id = {l.id: idx for idx, l in enumerate(labels)}
+    names = {0:'person',1:'rider',2:'car', 3:'truck', 4:'bus', 5:'train', 6:'mcycle', 7:'bcycle'}
+    boxes = np.array([x['bbox'] for x in image_boxes])
+    # boxes[:,2:] = boxes[:,2:] + boxes[:,:2]
+    boxes = Boxes(boxes)
+    # classes = [names[dataset_id_to_contiguous_id[x['category_id']]] for x in image_boxes]
+    classes = [names[x['category_id']] for x in image_boxes]
+    test_v = Visualizer(img1_)
+    test_v.overlay_instances(boxes=boxes, labels=classes)
+    img = test_v.get_output().get_image()
+    plt.figure()
+    plt.imshow(img)
+    plt.show()
 
 
 from typing import List, Union

@@ -199,17 +199,24 @@ class DinoAlignHead(nn.Module):
             device = feat_cnn.device
             dino_instances = []
             cnn_instances = []
-            for idx, rlemasks in enumerate(gt_data):
-                masks = torch.tensor(np.stack([coco_mask.decode(x) for x in rlemasks]),dtype=float)
-                h,w = masks.shape[1:]
-                scaled_masks = torch.nn.functional.interpolate(masks.unsqueeze(1),size=feat_dino.shape[2:],mode='bicubic',antialias=True)
-                ids = torch.where(scaled_masks.squeeze(1).sum(1).sum(1))[0]
-                scaled_masks = scaled_masks[ids,:,:,:].to(device=feat_dino.device)
-                dino_instances.append((scaled_masks * feat_dino[idx,:,:,:]).sum(dim=2).sum(dim=2))
-                cnn_instances.append((scaled_masks * feat_cnn[idx,:,:,:]).sum(dim=2).sum(dim=2))
+            # for idx, rlemasks in enumerate(gt_data):
+            #     masks = torch.tensor(np.stack([coco_mask.decode(x) for x in rlemasks]),dtype=float)
+            #     h,w = masks.shape[1:]
+            #     scaled_masks = torch.nn.functional.interpolate(masks.unsqueeze(1),size=feat_dino.shape[2:],mode='bicubic',antialias=True)
+            #     ids = torch.where(scaled_masks.squeeze(1).sum(1).sum(1))[0]
+            #     scaled_masks = scaled_masks[ids,:,:,:].to(device=feat_dino.device)
+            #     dino_instances.append((scaled_masks * feat_dino[idx,:,:,:]).sum(dim=2).sum(dim=2))
+            #     cnn_instances.append((scaled_masks * feat_cnn[idx,:,:,:]).sum(dim=2).sum(dim=2))
+            for idx, sam_mask in enumerate(gt_data):
+                scaled_masks = torch.nn.functional.interpolate(torch.tensor(sam_mask).unsqueeze(0).unsqueeze(0),size=feat_dino.shape[2:],mode='nearest-exact').squeeze().to(device=feat_cnn.device)
+                dino_instances += [((scaled_masks == x) * feat_dino[idx,:,:,:]).sum(dim=1).sum(dim=1) for x in scaled_masks.unique()]
+                cnn_instances += [((scaled_masks == x) * feat_cnn[idx,:,:,:]).sum(dim=1).sum(dim=1) for x in scaled_masks.unique()]
+
             if self.normalize_feature:
-                dino_instances = torch.nn.functional.normalize(torch.cat(dino_instances), dim=1)
-                cnn_instances = torch.nn.functional.normalize(torch.cat(cnn_instances), dim=1)
+                # dino_instances = torch.nn.functional.normalize(torch.cat(dino_instances), dim=1)
+                # cnn_instances = torch.nn.functional.normalize(torch.cat(cnn_instances), dim=1)
+                dino_instances = torch.nn.functional.normalize(torch.stack(dino_instances), dim=1)
+                cnn_instances = torch.nn.functional.normalize(torch.stack(cnn_instances), dim=1)
                 if self.loss_type == 'similarity':
                     sim = torch.matmul(cnn_instances.unsqueeze(-2), dino_instances.unsqueeze(-1))
                     loss = (1-sim).mean()
