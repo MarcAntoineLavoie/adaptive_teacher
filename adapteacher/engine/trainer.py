@@ -1134,9 +1134,14 @@ class ATeacherTrainer(DefaultTrainer):
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=all_label_data) * self.dino_loss_weight
                 elif self.dino_sam_masks:
                     file_names = [x['file_name'].rsplit('/',1)[1] for x in label_data_q]
-                    rle_masks = [x['masks'] for x in self.label_data_masks if x['file_name'] in file_names]
-                    rle_masks += rle_masks
-                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=rle_masks) * self.dino_loss_weight   
+                    mask_files = [self.label_data_masks + x for x in file_names]
+                    sam_masks = [np.array(Image.open(x)) for x in mask_files]
+                    sam_masks += sam_masks
+                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=sam_masks) * self.dino_loss_weight
+                    # file_names = [x['file_name'].rsplit('/',1)[1] for x in label_data_q]
+                    # rle_masks = [x['masks'] for x in self.label_data_masks if x['file_name'] in file_names]
+                    # rle_masks += rle_masks
+                    # dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=rle_masks) * self.dino_loss_weight   
                 else:
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=all_label_data) * self.dino_loss_weight
                 record_dict['loss_dino'] = dino_loss
@@ -1160,10 +1165,16 @@ class ATeacherTrainer(DefaultTrainer):
                     dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=all_unlabel_data) * self.dino_loss_weight_target
                 elif self.dino_sam_masks:
                     file_names = [x['file_name'].rsplit('/',1)[1] for x in unlabel_data_k]
-                    rle_masks = [x['masks'] for x in self.unlabel_data_masks if x['file_name'] in file_names]
+                    mask_files = [self.unlabel_data_masks + x for x in file_names]
+                    sam_masks = [np.array(Image.open(x)) for x in mask_files]
                     if len(all_unlabel_data) > len(unlabel_data_k):
-                        rle_masks += rle_masks
-                    dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=rle_masks) * self.dino_loss_weight_target 
+                        sam_masks += sam_masks
+                    dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=sam_masks) * self.dino_loss_weight_target 
+                    # file_names = [x['file_name'].rsplit('/',1)[1] for x in unlabel_data_k]
+                    # rle_masks = [x['masks'] for x in self.unlabel_data_masks if x['file_name'] in file_names]
+                    # if len(all_unlabel_data) > len(unlabel_data_k):
+                        # rle_masks += rle_masks
+                    # dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=rle_masks) * self.dino_loss_weight_target 
                 else:
                     dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=all_unlabel_data) * self.dino_loss_weight_target
                 record_dict['loss_dino_pseud'] = dino_loss_pseudo
