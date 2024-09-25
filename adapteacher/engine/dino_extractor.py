@@ -200,9 +200,9 @@ class DinoAlignHead(nn.Module):
             dino_instances = []
             cnn_instances = []
             for idx, rlemasks in enumerate(gt_data):
-                masks = torch.tensor(np.vstack([coco_mask.decode(x) for x in rlemasks['masks']]).astype(float))
+                masks = torch.tensor(np.stack([coco_mask.decode(x) for x in rlemasks]),dtype=float)
                 h,w = masks.shape[1:]
-                scaled_masks = torch.nn.functional.interpolate(gt_masks.unsqueeze(1),size=feat_dino.shape[2:],mode='bicubic',antialias=True)
+                scaled_masks = torch.nn.functional.interpolate(masks.unsqueeze(1),size=feat_dino.shape[2:],mode='bicubic',antialias=True)
                 ids = torch.where(scaled_masks.squeeze(1).sum(1).sum(1))[0]
                 scaled_masks = scaled_masks[ids,:,:,:].to(device=feat_dino.device)
                 dino_instances.append((scaled_masks * feat_dino[idx,:,:,:]).sum(dim=2).sum(dim=2))
@@ -264,8 +264,8 @@ class DinoAlignHead(nn.Module):
                 mask = torch.ones_like(exp_sim)
                 mask.scatter_(1,ids,0)
             exp_sim=mask*exp_sim
-        log_prob = sims_scaled - torch.log(exp_sim.sum(1, keepdim=True))
-        loss = -torch.diagonal(log_prob).mean() * (self.contrast_temp/self.default_temp)
+        log_prob = torch.diagonal(sims_scaled) - torch.log(exp_sim.sum(1))
+        loss = -log_prob.mean() * (self.contrast_temp/self.default_temp)
         return loss, sim[:,:sim.shape[0]]
     
     @torch.no_grad()
@@ -286,7 +286,7 @@ class DinoAlignHead(nn.Module):
             self.curr_id += n
 
 @torch.no_grad()
-def gather_across_devices(tensor1, pad=1024):
+def gather_across_devices(tensor1, pad=2048):
     """
     From https://github.com/zhangyifei01/MoCo-v2-SupContrast/blob/main/moco/builder_in.py#L185
     """

@@ -367,18 +367,23 @@ class ATeacherTrainer(DefaultTrainer):
             model.dino_align = model.dino_align.to((torch.device(cfg.MODEL.DEVICE)))
             self.dino_sam_masks = cfg.SEMISUPNET.DINO_SAM_MASK
             if cfg.SEMISUPNET.DINO_SAM_MASK:
-                label_data_mask_file = './datasets/cityscapes/leftImg8bit_trainvaltest/leftImg8bit/train/sam_masks.pkl'
+                data_root = './datasets'
+                label_data_mask_file = './datasets/cityscapes/leftImg8bit/train/sam_masks.pkl'
                 with open(label_data_mask_file, 'rb') as f_in:
-                    self.label_data_masks = pickle.loads(f_in)
+                    self.label_data_masks = pickle.load(f_in)
                 if 'city' in cfg.DATASETS.TRAIN_UNLABEL[0]:
                     split = '_RAW_CITYSCAPES_SPLITS'
                 elif 'ACDC' in cfg.DATASETS.TRAIN_UNLABEL[0]:
                     split = '_RAW_ACDC_SPLITS'
                 elif 'BDD' in cfg.DATASETS.TRAIN_UNLABEL[0]:
                     split = '_RAW_BDD_SPLITS'
-                unlabel_data_mask_file = '/'.join(DatasetCatalog['ACDC_val_rain'].__globals__[split][cfg.DATASETS.TRAIN_UNLABEL[0]], 'sam_masks.pkl')
+                # unlabel_data_mask_file = '/'.join([data_root,DatasetCatalog['ACDC_val_rain'].__globals__[split][cfg.DATASETS.TRAIN_UNLABEL[0]][0][:-1], 'sam_masks.pkl'])
+                unlabel_data_mask_file = './datasets/bdd/images/sam_masks.pkl'
                 with open(unlabel_data_mask_file, 'rb') as f_in:
-                    self.unlabel_data_masks = pickle.loads(f_in)                
+                    self.unlabel_data_masks = pickle.load(f_in)
+                #  label_data_mask_file = '/'.join([data_root,DatasetCatalog['ACDC_val_rain'].__globals__[split][cfg.DATASETS.TRAIN_LABEL[0]][0], 'sam_masks.pkl'])
+                # with open(label_data_mask_file, 'rb') as f_in:
+                    # self.label_data_masks = pickle.load(f_in)                   
                 
         else:
             self.use_dino = False
@@ -949,8 +954,9 @@ class ATeacherTrainer(DefaultTrainer):
                     mask = self.get_fg_mask_torch(label_data_q, noise_regions=label_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=label_data_q) * self.dino_loss_weight
                 elif self.dino_sam_masks:
-                    file_names = [x['file_name'] for x in label_data_q]
+                    file_names = [x['file_name'].rsplit('/',1)[1] for x in label_data_q]
                     rle_masks = [x['masks'] for x in self.label_data_masks if x['file_name'] in file_names]
+                    rle_masks += rle_masks
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=rle_masks) * self.dino_loss_weight    
                 else:
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=label_data_q) * self.dino_loss_weight
@@ -1138,6 +1144,11 @@ class ATeacherTrainer(DefaultTrainer):
                 if 0:#self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT != 1.0 or self.cfg.INPUT.USE_RANDOM_NOISE:
                     mask = self.get_fg_mask_torch(all_label_data, noise_regions=label_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT)
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=all_label_data) * self.dino_loss_weight
+                elif self.dino_sam_masks:
+                    file_names = [x['file_name'].rsplit('/',1)[1] for x in label_data_q]
+                    rle_masks = [x['masks'] for x in self.label_data_masks if x['file_name'] in file_names]
+                    rle_masks += rle_masks
+                    dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=rle_masks) * self.dino_loss_weight   
                 else:
                     dino_loss = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=all_label_data) * self.dino_loss_weight
                 record_dict['loss_dino'] = dino_loss
@@ -1159,6 +1170,12 @@ class ATeacherTrainer(DefaultTrainer):
                 if 0:#self.cfg.INPUT.USE_RANDOM_NOISE:
                     mask = self.get_fg_mask_torch(all_unlabel_data, noise_regions=unlabel_regions, thresh=self.cfg.SEMISUPNET.DINO_SOURCE_FG_THRESH, bg_weight=self.cfg.SEMISUPNET.DINO_SOURCE_BG_WEIGHT, has_segm=False)
                     dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, fg_mask=mask, gt_data=all_unlabel_data) * self.dino_loss_weight_target
+                elif self.dino_sam_masks:
+                    file_names = [x['file_name'].rsplit('/',1)[1] for x in unlabel_data_k]
+                    rle_masks = [x['masks'] for x in self.unlabel_data_masks if x['file_name'] in file_names]
+                    if len(all_unlabel_data) > len(unlabel_data_k):
+                        rle_masks += rle_masks
+                    dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=rle_masks) * self.dino_loss_weight_target 
                 else:
                     dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=all_unlabel_data) * self.dino_loss_weight_target
                 record_dict['loss_dino_pseud'] = dino_loss_pseudo

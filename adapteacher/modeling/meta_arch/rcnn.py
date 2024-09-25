@@ -95,6 +95,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         align_proposals: bool,
         # dis_loss_weight: float = 0,
         proj_type: str,
+        dino_out_dim: int,
     ):
         """
         Args:
@@ -123,12 +124,22 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         ), f"{self.pixel_mean} and {self.pixel_std} have different shapes!"
         # @yujheli: you may need to build your discriminator here
 
+        if proj_type == 'integrated':
+            self.integrated_proj = True
+            in_dims = self.backbone.output_shape()[dis_type].channels
+            self.proj_layer = nn.Sequential(nn.ReLU(), nn.Conv2d(in_dims, dino_out_dim, 1, 1))
+        else:
+            self.integrated_proj = False
+
         self.dis_type = dis_type
         self.D_img = None
         # self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels['res4']) # Need to know the channel
         
         # self.D_img = None
-        self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]) # Need to know the channel
+        if self.integrated_proj:
+            self.D_img = FCDiscriminator_img(dino_out_dim)
+        else:
+            self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]) # Need to know the channel
         # self.bceLoss_func = nn.BCEWithLogitsLoss()
 
 
@@ -137,12 +148,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         else:
             self.roi_heads.align_proposals = False
 
-        if proj_type == 'integrated':
-            self.integrated_proj = True
-            in_dims = self.backbone.output_shape()[dis_type].channels
-            self.proj_layer = nn.Sequential(nn.ReLU(), nn.Conv2d(in_dims, 768, 1, 1))
-        else:
-            self.integrated_proj = False
+
 
     def build_discriminator(self):
         self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]).to(self.device) # Need to know the channel
@@ -150,10 +156,20 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
     @classmethod
     def from_config(cls, cfg):
         backbone = build_backbone(cfg)
+        dino_out_dim_dict = {'dinov2_vits14':384,'dinov2_vitb14':768,'dinov2_vitl14':1024,'dinov2_vitg14':1536}
+        if cfg.SEMISUPNET.DINO_HEAD == 'integrated':
+            dino_size = dino_out_dim_dict[cfg.SEMISUPNET.DINO_MODEL]
+            feat_key = list(backbone.output_shape().keys())[-1]
+            dino_spec = {feat_key: ShapeSpec(channels = dino_size , stride=16)}
+            proposal_generator = build_proposal_generator(cfg, dino_spec)
+            roi_heads = build_roi_heads(cfg, dino_spec)
+        else:
+            proposal_generator = build_proposal_generator(cfg, backbone.output_shape())
+            roi_heads = build_roi_heads(cfg, backbone.output_shape())
         return {
             "backbone": backbone,
-            "proposal_generator": build_proposal_generator(cfg, backbone.output_shape()),
-            "roi_heads": build_roi_heads(cfg, backbone.output_shape()),
+            "proposal_generator": proposal_generator,
+            "roi_heads": roi_heads,
             "input_format": cfg.INPUT.FORMAT,
             "vis_period": cfg.VIS_PERIOD,
             "pixel_mean": cfg.MODEL.PIXEL_MEAN,
@@ -161,7 +177,8 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             "dis_type": cfg.SEMISUPNET.DIS_TYPE,
             # "dis_loss_ratio": cfg.xxx,
             "align_proposals": cfg.SEMISUPNET.ALIGN_PROPOSALS,
-            "proj_type": cfg.SEMISUPNET.DINO_HEAD
+            "proj_type": cfg.SEMISUPNET.DINO_HEAD,
+            "dino_out_dim": dino_out_dim_dict[cfg.SEMISUPNET.DINO_MODEL]
         }
 
     def preprocess_image_train(self, batched_inputs: List[Dict[str, torch.Tensor]]):
@@ -226,6 +243,8 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 images_s, images_t = self.preprocess_image_train(batched_inputs)
 
                 features = self.backbone(images_s.tensor)
+                if self.integrated_proj:
+                    features[self.dis_type] = self.proj_layer(features[self.dis_type])
 
                 # import pdb
                 # pdb.set_trace()
@@ -235,6 +254,8 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
 
                 features_t = self.backbone(images_t.tensor)
+                if self.integrated_proj:
+                    features_t[self.dis_type] = self.proj_layer(features_t[self.dis_type])
                 
                 features_t = grad_reverse(features_t[self.dis_type])
                 # features_t = grad_reverse(features_t['p2'])
@@ -259,7 +280,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
 
         features = self.backbone(images.tensor)
         if self.integrated_proj:
-            pass
+            features[self.dis_type] = self.proj_layer(features[self.dis_type])
         # if self.dis_type == 'res4':
         #     features = {key: features[key]/1000 for key in features.keys()}
 
@@ -406,6 +427,52 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             storage.put_image(vis_name, vis_img)
             break  # only visualize one image in a batch
 
+    def inference(
+        self,
+        batched_inputs: List[Dict[str, torch.Tensor]],
+        detected_instances: Optional[List[Instances]] = None,
+        do_postprocess: bool = True,
+    ):
+        """
+        Run inference on the given inputs.
+
+        Args:
+            batched_inputs (list[dict]): same as in :meth:`forward`
+            detected_instances (None or list[Instances]): if not None, it
+                contains an `Instances` object per image. The `Instances`
+                object contains "pred_boxes" and "pred_classes" which are
+                known boxes in the image.
+                The inference will then skip the detection of bounding boxes,
+                and only predict other per-ROI outputs.
+            do_postprocess (bool): whether to apply post-processing on the outputs.
+
+        Returns:
+            When do_postprocess=True, same as in :meth:`forward`.
+            Otherwise, a list[Instances] containing raw network outputs.
+        """
+        assert not self.training
+
+        images = self.preprocess_image(batched_inputs)
+        features = self.backbone(images.tensor)
+        if self.integrated_proj:
+            features[self.dis_type] = self.proj_layer(features[self.dis_type])
+
+        if detected_instances is None:
+            if self.proposal_generator is not None:
+                proposals, _ = self.proposal_generator(images, features, None)
+            else:
+                assert "proposals" in batched_inputs[0]
+                proposals = [x["proposals"].to(self.device) for x in batched_inputs]
+
+            results, _ = self.roi_heads(images, features, proposals, None)
+        else:
+            detected_instances = [x.to(self.device) for x in detected_instances]
+            results = self.roi_heads.forward_with_given_boxes(features, detected_instances)
+
+        if do_postprocess:
+            assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
+            return GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
+        return results
 
 
 @META_ARCH_REGISTRY.register()

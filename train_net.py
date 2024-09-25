@@ -63,7 +63,7 @@ def setup(args):
         cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_{}".format(args.acdc_type))
         cfg.DATASETS.TRAIN_UNLABEL = ("ACDC_train_{}".format(args.acdc_type),)
     # cfg.DATASETS.TRAIN_UNLABEL = ("cityscapes_foggy_train")
-    cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_fog","ACDC_val_night","ACDC_val_rain","ACDC_val_snow")
+    # cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_fog","ACDC_val_night","ACDC_val_rain","ACDC_val_snow")
     # cfg.INPUT.MIN_SIZE_TRAIN = (800,)
     if cfg.SEMISUPNET.DINO_BASE:
         scale = cfg.INPUT.DINO_PATCH_SIZE
@@ -191,7 +191,7 @@ if __name__ == "__main__":
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_prob.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_tiny.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city.yaml'
-    # args.config_file = './configs/faster_rcnn_VGG_cross_city_test.yaml'
+    # args.config_file = './configs/faster_rcnn_VGG_cross_city_test_small.yaml'
     # args.config_file = './configs/faster_rcnn_R101_cross_clipart_v2.yaml'
     # args.config_file = './configs/faster_rcnn_RES_cross_city_tiny.yaml'
     # args.resume = False
