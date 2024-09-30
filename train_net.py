@@ -76,7 +76,7 @@ def setup(args):
     # cfg.DATASETS.TEST = ("cityscapes_foggy_train",)
     # cfg.INPUT.MIN_SIZE_TRAIN = (800,)
     # cfg.SEMISUPNET.USE_DINO = False
-    cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT = None
+    # cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT = None
     if cfg.SEMISUPNET.DINO_BASE:
         scale = cfg.INPUT.DINO_PATCH_SIZE
         if cfg.INPUT.MAX_SIZE_TEST % scale:
@@ -208,6 +208,7 @@ if __name__ == "__main__":
     # args.config_file = './configs/faster_rcnn_RES_cross_city_tiny.yaml'
     # args.config_file = './configs/faster_rcnn_DINO_test.yaml'
     # args.config_file = './configs/faster_rcnn_2trunks.yaml'
+    # args.config_file = './configs/faster_rcnn_VGG_cross_city_test_small.yaml'
     # args.resume = False
     args.resume = True
 

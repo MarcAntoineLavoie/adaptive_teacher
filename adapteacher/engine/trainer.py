@@ -367,8 +367,8 @@ class ATeacherTrainer(DefaultTrainer):
             model.dino_align = model.dino_align.to((torch.device(cfg.MODEL.DEVICE)))
             self.dino_sam_masks = cfg.SEMISUPNET.DINO_SAM_MASK
             if cfg.SEMISUPNET.DINO_SAM_MASK:
-                self.label_data_masks = './datasets/cityscapes/leftImg8bit/train/decoded_masks/'
-                self.unlabel_data_masks = './datasets/bdd/images/decoded_masks/'              
+                self.label_data_masks = './datasets/cityscapes/leftImg8bit/decoded_masks_train/'
+                self.unlabel_data_masks = './datasets/bdd/images/decoded_masks_train/'              
                 
         else:
             self.use_dino = False
@@ -1166,7 +1166,7 @@ class ATeacherTrainer(DefaultTrainer):
                 elif self.dino_sam_masks:
                     file_names = [x['file_name'].rsplit('/',1)[1] for x in unlabel_data_k]
                     mask_files = [self.unlabel_data_masks + x for x in file_names]
-                    sam_masks = [np.array(Image.open(x)) for x in mask_files]
+                    sam_masks = [np.array(Image.open(x.rsplit('.',1)[0]+'.png')) for x in mask_files]
                     if len(all_unlabel_data) > len(unlabel_data_k):
                         sam_masks += sam_masks
                     dino_loss_pseudo = self.model.dino_align.dino_loss(cnn_feat, dino_feat, gt_data=sam_masks) * self.dino_loss_weight_target 
