@@ -100,6 +100,7 @@ def add_ateacher_config(cfg):
     # _C.SEMISUPNET.SCALE_LOC_LOSS_SOURCE = 1.0
     # _C.SEMISUPNET.SCALE_LOC_LOSS_TARGET = 1.0
     _C.SEMISUPNET.DINO_SAM_MASK = False
+    _C.SEMISUPNET.DINO_LR_SCALE = 0.0
 
     # _C.NEW_ALLOWED = True
 

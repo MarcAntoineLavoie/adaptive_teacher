@@ -19,6 +19,10 @@ from detectron2.utils.events import get_event_storage
 from detectron2.structures import ImageList, Instances
 # from adapteacher.modeling.prob_rcnn import ProbabilisticFastRCNNOutputLayers
 
+from detectron2.layers import Conv2d
+from detectron2.layers import get_norm
+import fvcore.nn.weight_init as weight_init
+
 ############### Image discriminator ##############
 class FCDiscriminator_img(nn.Module):
     def __init__(self, num_classes, ndf1=256, ndf2=128):
@@ -127,7 +131,20 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         if proj_type == 'integrated':
             self.integrated_proj = True
             in_dims = self.backbone.output_shape()[dis_type].channels
-            self.proj_layer = nn.Sequential(nn.ReLU(), nn.Conv2d(in_dims, dino_out_dim, 1, 1))
+            # self.proj_layer = nn.Conv2d(in_dims, dino_out_dim, 1, 1)
+            proj_ = Conv2d(
+                in_dims,
+                dino_out_dim,
+                kernel_size=1,
+                stride=1,
+                padding=3,
+                bias=True,
+                norm=get_norm('BN', dino_out_dim),
+            )
+            weight_init.c2_msra_fill(proj_)
+            with torch.no_grad():
+                proj_.weight = nn.Parameter(proj_.weight * 0.25)
+            self.proj_layer = nn.Sequential(proj_, nn.ReLU())
         else:
             self.integrated_proj = False
 
@@ -326,7 +343,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             losses.update(detector_losses)
             losses.update(proposal_losses)
             losses["loss_D_img_s"] = loss_D_img_s*0.001
-            #print([x.item() for x in proposal_losses.values()])
+            print([x.item() for x in proposal_losses.values()])
             return losses, [], [], None
 
         elif branch == "supervised_target":
@@ -1373,7 +1390,11 @@ class DINOgenRCNNN(GeneralizedRCNN):
     
 class DinoV2VitFeatureExtractor_wrapper(DinoV2VitFeatureExtractor):
     def __init__(self, cfg, output_layer='dino_out'):
-        super(DinoV2VitFeatureExtractor_wrapper, self).__init__(cfg, model_name=cfg.SEMISUPNET.DINO_MODEL, normalize_feature=False, freeze=True)
+        if cfg.SEMISUPNET.USE_DINO:
+            freeze = False
+        else:
+            freeze = True
+        super(DinoV2VitFeatureExtractor_wrapper, self).__init__(cfg, model_name=cfg.SEMISUPNET.DINO_MODEL, normalize_feature=False, freeze=freeze)
         self.output_layer = output_layer
         self._out_feature_channels = {self.output_layer:self.encoder.blocks[-1].norm2.bias.shape[0]}
         self._out_feature_strides = {self.output_layer:self.patch_size}

@@ -117,7 +117,7 @@ def build_detection_semisup_train_loader(cfg, mapper=None):
 
 # uesed by evaluation
 def build_detection_test_loader(cfg, dataset_name, mapper=None):
-    if cfg.SEMISUPNET.DINO_BASE:
+    if cfg.SEMISUPNET.DINO_BASE or cfg.MODEL.META_ARCHITECTURE == "DINOgenRCNNN":
         mapper = DatasetMapper_test(cfg, is_train=False, keep_tf_data=False, use_w=True)
     dataset_dicts = get_detection_dataset_dicts(
         [dataset_name],

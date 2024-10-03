@@ -79,6 +79,9 @@ import wandb
 from detectron2.data.dataset_mapper import DatasetMapper
 from math import ceil
 import pickle
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Type, Union
+from detectron2.solver import build_optimizer as default_optimizer
+from detectron2.solver.build import maybe_add_gradient_clipping, get_default_optimizer_params, reduce_param_groups
 
 # pedestrian		0,93,192+x
 # rider			0,97,170+x
@@ -620,6 +623,20 @@ class ATeacherTrainer(DefaultTrainer):
     @classmethod
     def build_lr_scheduler(cls, cfg, optimizer):
         return build_lr_scheduler(cfg, optimizer)
+
+    @classmethod
+    def build_optimizer(cls, cfg, model):
+        """
+        Returns:
+            torch.optim.Optimizer:
+
+        It now calls :func:`detectron2.solver.build_optimizer`.
+        Overwrite it if you'd like a different optimizer.
+        """
+        if cfg.SEMISUPNET.DINO_BASE and cfg.SEMISUPNET.DINO_LR_SCALE:
+            return split_optimizer(cfg, model)
+        else:
+            return default_optimizer(cfg, model)
 
     def train(self):
         # self.test_DINO()
@@ -2326,6 +2343,134 @@ class ATeacherTrainer(DefaultTrainer):
                 csv_writer.writerow(row)
             self.pseudo_counts *= 0
 
+def split_optimizer(cfg, model):
+    """
+    Build an optimizer from config.
+    """
+    list_weights = ['backbone']
+    params = get_split_optimizer_params(
+        model,
+        base_lr=cfg.SOLVER.BASE_LR,
+        weight_decay_norm=cfg.SOLVER.WEIGHT_DECAY_NORM,
+        bias_lr_factor=cfg.SOLVER.BIAS_LR_FACTOR,
+        weight_decay_bias=cfg.SOLVER.WEIGHT_DECAY_BIAS,
+        weight_decay=cfg.SOLVER.WEIGHT_DECAY,
+        scaled_weights=list_weights,
+        scale_factor=cfg.SEMISUPNET.DINO_LR_SCALE,
+
+    )
+    sgd_args = {
+        "params": params,
+        "lr": cfg.SOLVER.BASE_LR,
+        "momentum": cfg.SOLVER.MOMENTUM,
+        "nesterov": cfg.SOLVER.NESTEROV,
+        "weight_decay": cfg.SOLVER.WEIGHT_DECAY,
+    }
+    if TORCH_VERSION >= (1, 12):
+        sgd_args["foreach"] = True
+    return maybe_add_gradient_clipping(cfg, torch.optim.SGD(**sgd_args))
+
+def get_split_optimizer_params(
+    model: torch.nn.Module,
+    base_lr: Optional[float] = None,
+    weight_decay: Optional[float] = None,
+    weight_decay_norm: Optional[float] = None,
+    bias_lr_factor: Optional[float] = 1.0,
+    weight_decay_bias: Optional[float] = None,
+    lr_factor_func: Optional[Callable] = None,
+    overrides: Optional[Dict[str, Dict[str, float]]] = None,
+    scaled_weights: Optional[str] = None,
+    scale_factor: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Get default param list for optimizer, with support for a few types of
+    overrides. If no overrides needed, this is equivalent to `model.parameters()`.
+
+    Args:
+        base_lr: lr for every group by default. Can be omitted to use the one in optimizer.
+        weight_decay: weight decay for every group by default. Can be omitted to use the one
+            in optimizer.
+        weight_decay_norm: override weight decay for params in normalization layers
+        bias_lr_factor: multiplier of lr for bias parameters.
+        weight_decay_bias: override weight decay for bias parameters.
+        lr_factor_func: function to calculate lr decay rate by mapping the parameter names to
+            corresponding lr decay rate. Note that setting this option requires
+            also setting ``base_lr``.
+        overrides: if not `None`, provides values for optimizer hyperparameters
+            (LR, weight decay) for module parameters with a given name; e.g.
+            ``{"embedding": {"lr": 0.01, "weight_decay": 0.1}}`` will set the LR and
+            weight decay values for all module parameters named `embedding`.
+
+    For common detection models, ``weight_decay_norm`` is the only option
+    needed to be set. ``bias_lr_factor,weight_decay_bias`` are legacy settings
+    from Detectron1 that are not found useful.
+
+    Example:
+    ::
+        torch.optim.SGD(get_default_optimizer_params(model, weight_decay_norm=0),
+                       lr=0.01, weight_decay=1e-4, momentum=0.9)
+    """
+    if overrides is None:
+        overrides = {}
+    defaults = {}
+    if base_lr is not None:
+        defaults["lr"] = base_lr
+    if weight_decay is not None:
+        defaults["weight_decay"] = weight_decay
+    bias_overrides = {}
+    if bias_lr_factor is not None and bias_lr_factor != 1.0:
+        # NOTE: unlike Detectron v1, we now by default make bias hyperparameters
+        # exactly the same as regular weights.
+        if base_lr is None:
+            raise ValueError("bias_lr_factor requires base_lr")
+        bias_overrides["lr"] = base_lr * bias_lr_factor
+    if weight_decay_bias is not None:
+        bias_overrides["weight_decay"] = weight_decay_bias
+    if len(bias_overrides):
+        if "bias" in overrides:
+            raise ValueError("Conflicting overrides for 'bias'")
+        overrides["bias"] = bias_overrides
+    if lr_factor_func is not None:
+        if base_lr is None:
+            raise ValueError("lr_factor_func requires base_lr")
+    norm_module_types = (
+        torch.nn.BatchNorm1d,
+        torch.nn.BatchNorm2d,
+        torch.nn.BatchNorm3d,
+        torch.nn.SyncBatchNorm,
+        # NaiveSyncBatchNorm inherits from BatchNorm2d
+        torch.nn.GroupNorm,
+        torch.nn.InstanceNorm1d,
+        torch.nn.InstanceNorm2d,
+        torch.nn.InstanceNorm3d,
+        torch.nn.LayerNorm,
+        torch.nn.LocalResponseNorm,
+    )
+    params: List[Dict[str, Any]] = []
+    memo: Set[torch.nn.parameter.Parameter] = set()
+    for module_name, module in model.named_modules():
+        for module_param_name, value in module.named_parameters(recurse=False):
+            if not value.requires_grad:
+                continue
+            # Avoid duplicating parameters
+            if value in memo:
+                continue
+            memo.add(value)
+
+            hyperparams = copy.copy(defaults)
+            if isinstance(module, norm_module_types) and weight_decay_norm is not None:
+                hyperparams["weight_decay"] = weight_decay_norm
+            if lr_factor_func is not None:
+                hyperparams["lr"] *= lr_factor_func(f"{module_name}.{module_param_name}")
+
+            if scaled_weights and any(scaled_module in module_name for scaled_module in scaled_weights):
+                 temp_dict = {}
+                 for key in hyperparams.keys():
+                     temp_dict[key] = hyperparams[key] * scale_factor
+                 hyperparams.update(temp_dict)
+            hyperparams.update(overrides.get(module_param_name, {}))
+            params.append({"params": [value], **hyperparams})
+    return reduce_param_groups(params)
     
 def load_pseudo_dicts(filename):
     with open(filename, 'r') as f_in:

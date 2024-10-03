@@ -58,7 +58,7 @@ def setup(args):
         cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     # cfg = scale_configs(cfg)
-    cfg['DATALOADER']['NUM_WORKERS'] = 8
+    cfg['DATALOADER']['NUM_WORKERS'] = 4
     # cfg.SOLVER.CHECKPOINT_PERIOD = 50
     # cfg['MODEL']['PIXEL_STD'] = [1.0, 1.0, 1.0]
     if args.acdc_type is not None:
@@ -193,7 +193,7 @@ if __name__ == "__main__":
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
     args.dist_url = (':').join(url_parts)
-    args.use_wandb=True
+    args.use_wandb=False
 
     #   --num-gpus 8
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\

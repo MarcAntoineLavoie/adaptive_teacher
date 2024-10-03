@@ -30,7 +30,7 @@ class DinoV2VitFeatureExtractor(nn.Module):
     """
     DINO V2 Vision Transformer Feature Extractor.
     """
-    def __init__(self, cfg, model_name='dinov2_vitb14', normalize_feature=True, freeze=True):
+    def __init__(self, cfg, model_name='dinov2_vits14', normalize_feature=True, freeze=True):
         super(DinoV2VitFeatureExtractor, self).__init__()
         if 'vgg' in cfg.MODEL.BACKBONE:
             self.preprocessing = dino_preprocessing(cfg.MODEL.PIXEL_MEAN, cfg.MODEL.PIXEL_STD, is_RGB=True)
