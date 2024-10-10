@@ -211,7 +211,19 @@ def build_detection_semisup_train_loader_two_crops(cfg, mapper=None):
         label_sampler = TrainingSampler(len(label_dataset))
         unlabel_sampler = TrainingSampler(len(unlabel_dataset))
     elif sampler_name == "RepeatFactorTrainingSampler":
-        raise NotImplementedError("{} not yet supported.".format(sampler_name))
+        label_repeat_factors = (
+            RepeatFactorTrainingSampler.repeat_factors_from_category_frequency(
+                label_dicts, cfg.DATALOADER.REPEAT_THRESHOLD
+            )
+        )
+        unlabel_repeat_factors = (
+            RepeatFactorTrainingSampler.repeat_factors_from_category_frequency(
+                unlabel_dicts, cfg.DATALOADER.REPEAT_THRESHOLD
+            )
+        )
+        label_sampler = RepeatFactorTrainingSampler(label_repeat_factors)
+        unlabel_sampler = RepeatFactorTrainingSampler(unlabel_repeat_factors)
+        # raise NotImplementedError("{} not yet supported.".format(sampler_name))
     else:
         raise ValueError("Unknown training sampler: {}".format(sampler_name))
     return_regions = cfg.INPUT.CLEAN_DETECTIONS or cfg.SEMISUPNET.USE_DINO
