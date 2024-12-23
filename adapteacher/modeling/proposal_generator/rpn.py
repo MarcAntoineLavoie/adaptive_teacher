@@ -55,13 +55,13 @@ class PseudoLabRPN(RPN):
         else:  # inference
             losses = {}
 
-        proposals, keeps = self.predict_proposals(
+        proposals, keeps, proposal_idx, proposals_old = self.predict_proposals(
             anchors, pred_objectness_logits, pred_anchor_deltas, images.image_sizes
         )
-        if 0:#orig_proposals:
+        if orig_proposals:
             out_scores = [pred_objectness_logits[0][x,:][keeps[x]] for x in range(len(proposals))]
             # out_scores = [x[y] for x,y in zip(pred_objectness_logits,keeps)]
-            return proposals, losses, pred_objectness_logits, keeps
+            return proposals, losses, pred_objectness_logits, keeps, proposal_idx, proposals_old
         else:
             return proposals, losses
         
@@ -186,6 +186,7 @@ def find_top_rpn_proposals(
     topk_scores = []  # #lvl Tensor, each of shape N x topk
     topk_proposals = []
     level_ids = []  # #lvl Tensor, each of shape (topk,)
+    proposal_idx = []
     batch_idx = move_device_like(torch.arange(num_images, device=device), proposals[0])
     for level_id, (proposals_i, logits_i) in enumerate(zip(proposals, pred_objectness_logits)):
         Hi_Wi_A = logits_i.shape[1]
@@ -201,6 +202,7 @@ def find_top_rpn_proposals(
 
         topk_proposals.append(topk_proposals_i)
         topk_scores.append(topk_scores_i)
+        proposal_idx.append(topk_idx)
         level_ids.append(
             move_device_like(
                 torch.full((num_proposals_i,), level_id, dtype=torch.int64, device=device),
@@ -233,9 +235,9 @@ def find_top_rpn_proposals(
         boxes.clip(image_size)
 
         # filter empty boxes
-        keep = boxes.nonempty(threshold=min_box_size)
-        if _is_tracing() or keep.sum().item() != len(boxes):
-            boxes, scores_per_img, lvl = boxes[keep], scores_per_img[keep], lvl[keep]
+        keep1 = boxes.nonempty(threshold=min_box_size)
+        if _is_tracing() or keep1.sum().item() != len(boxes):
+            boxes, scores_per_img, lvl = boxes[keep1], scores_per_img[keep1], lvl[keep1]
 
         keep = batched_nms(boxes.tensor, scores_per_img, lvl, nms_thresh)
         # In Detectron1, there was different behavior during training vs. testing.
@@ -251,5 +253,5 @@ def find_top_rpn_proposals(
         res.proposal_boxes = boxes[keep]
         res.objectness_logits = scores_per_img[keep]
         results.append(res)
-        keeps.append(keep)
-    return results, keeps
+        keeps.append([keep1,keep])
+    return results, keeps, proposal_idx, proposals

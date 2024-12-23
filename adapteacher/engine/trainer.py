@@ -47,7 +47,7 @@ from detectron2.evaluation import (
     verify_results,
 )
 
-
+from detectron2.config import instantiate
 
 from detectron2.utils.comm import get_world_size
 from collections import abc
@@ -333,7 +333,7 @@ class BaselineTrainer(DefaultTrainer):
 
 # Adaptive Teacher Trainer
 class ATeacherTrainer(DefaultTrainer):
-    def __init__(self, cfg, wandb_run=None):
+    def __init__(self, cfg, wandb_run=None, cfg_lazy=None):
         """
         Args:
             cfg (CfgNode):
@@ -344,21 +344,23 @@ class ATeacherTrainer(DefaultTrainer):
         data_loader = self.build_train_loader(cfg)
 
         # create an student model
-        model = self.build_model(cfg)
+        if cfg_lazy:
+            model = self.build_lazy_model(cfg_lazy)
+        else:
+            model = self.build_model(cfg)
 
         if cfg.SEMISUPNET.USE_DINO and cfg.SEMISUPNET.DINO_LOSS_WEIGHT>0.0:
             self.dino_layer = cfg.SEMISUPNET.DIS_TYPE
             self.branch = "supervised"
             self.use_dino = True
             self.cnn_feat = {}
-            if "vgg" in cfg.MODEL.BACKBONE.NAME:
-                cnn_dim = [*model.backbone.modules()][-3].num_features
-            elif cfg.SEMISUPNET.DINO_MODEL=="dinov2_vits14":
-                cnn_dim = 384
-            elif 'dino' in cfg.MODEL.BACKBONE.NAME or 'BiCephal' in cfg.MODEL.META_ARCHITECTURE:
-                cnn_dim = 768
-            else:
-                cnn_dim = [*model.backbone.modules()][-1].num_features
+            cnn_dim = model.backbone._out_feature_channels[cfg.SEMISUPNET.DIS_TYPE]
+            # if "vgg" in cfg.MODEL.BACKBONE.NAME:
+            #     cnn_dim = [*model.backbone.modules()][-3].num_features
+            # elif 'dino' in cfg.MODEL.BACKBONE.NAME or 'BiCephal' in cfg.MODEL.META_ARCHITECTURE:
+            #     cnn_dim = 768
+            # else:
+            #     cnn_dim = [*model.backbone.modules()][-1].num_features
             model.dino_head = DinoV2VitFeatureExtractor(cfg, model_name=cfg.SEMISUPNET.DINO_MODEL, normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dinov2_vitb14', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb16', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
@@ -403,7 +405,10 @@ class ATeacherTrainer(DefaultTrainer):
         optimizer = self.build_optimizer(cfg, model)
 
         # create an teacher model
-        model_teacher = self.build_model(cfg)
+        if cfg_lazy:
+            model_teacher = self.build_lazy_model(cfg_lazy)
+        else:
+            model_teacher = self.build_model(cfg)
         self.model_teacher = model_teacher
 
         # For training, wrap with DDP. But don't need this for inference.
@@ -525,6 +530,21 @@ class ATeacherTrainer(DefaultTrainer):
         # self.activations = []
         # self.gradient = []
 
+    @staticmethod
+    def build_lazy_model(cfg):
+        """
+        Returns:
+            torch.nn.Module:
+
+        It now calls :func:`detectron2.modeling.build_model`.
+        Overwrite it if you'd like a different model.
+        """
+        from adapteacher.modeling.meta_arch.rcnn import lazy_model_wrapper
+        model = lazy_model_wrapper(cfg)
+        logger = logging.getLogger(__name__)
+        logger.info("Model:\n{}".format(model))
+        return model
+
     def _get_activations_hook(self, module, input, output):
         # self.activations = output
         self.activations.append(output)
@@ -575,6 +595,12 @@ class ATeacherTrainer(DefaultTrainer):
         checkpoint = self.checkpointer.resume_or_load(
             self.cfg.MODEL.WEIGHTS, resume=resume
         )
+        # if resume:
+        #     checkpoint = self.checkpointer.resume_or_load(
+        #         self.cfg.MODEL.WEIGHTS, resume=resume
+        #     )
+        # else:
+        #     self.checkpointer.load1(self.cfg.MODEL.WEIGHTS)
         # if self.model.dis_type == 'res4':
         #     self.model.backbone.stem.weight /= 1000
         if resume and self.checkpointer.has_checkpoint():
@@ -901,14 +927,14 @@ class ATeacherTrainer(DefaultTrainer):
 
         # print(self.iter, self.model.iter)
 
-        if 'module' in self.model.__dict__['_modules']:
-            self.model.module.roi_heads.keep_proposals = {}
-            self.model.module.roi_heads.keep_stats = False
-            self.model_teacher.roi_heads.keep_stats = False
-        else:
-            self.model.roi_heads.keep_proposals = {}
-            self.model.roi_heads.keep_stats = False
-            self.model_teacher.roi_heads.keep_stats = False
+        # if 'module' in self.model.__dict__['_modules']:
+        #     self.model.module.roi_heads.keep_proposals = {}
+        #     self.model.module.roi_heads.keep_stats = False
+        #     self.model_teacher.roi_heads.keep_stats = False
+        # else:
+        #     self.model.roi_heads.keep_proposals = {}
+        #     self.model.roi_heads.keep_stats = False
+        #     self.model_teacher.roi_heads.keep_stats = False
             
         # burn-in stage (supervised training with labeled data)
 
@@ -1054,7 +1080,6 @@ class ATeacherTrainer(DefaultTrainer):
                 elif self.PL_swap == 'half':
                     if self.iter > self.PL_swap_iter and self.iter % 2:
                         swap_PL = True
-
             if self.use_gt_proposals:
                 record_dict.update({'iou_overlap':0})
             elif not self.use_dino_PL or swap_PL:
@@ -1540,7 +1565,7 @@ class ATeacherTrainer(DefaultTrainer):
     def test_DINO(self):
         self.model = self.model.eval()
         self.branch = "supervised"
-        n_imgs = 400
+        n_imgs = 500
 
         test_loaders = []
         for dataset_name in self.cfg.DATASETS.TEST:
@@ -1565,14 +1590,25 @@ class ATeacherTrainer(DefaultTrainer):
             #     if not lv1 % 10:
             #         print(lv1)
             n_instances = 0
-            for lv2 in range(6):
+
+            if not hasattr(self.model, 'dino_head'):
+                self.model.dino_head = DinoV2VitFeatureExtractor(self.cfg, model_name=self.cfg.SEMISUPNET.DINO_MODEL, normalize_feature=self.cfg.SEMISUPNET.DINO_LOSS_NORM).eval().to(device=self.model.device)
+                self.dino_layer = self.cfg.SEMISUPNET.DIS_TYPE
+                cnn_dim = self.model.backbone._out_feature_channels[self.cfg.SEMISUPNET.DIS_TYPE]
+                dino_dim = [*self.model.dino_head.modules()][-2].normalized_shape[0]
+                self.model.dino_align = DinoAlignHead(self.cfg, cnn_dim, dino_dim, normalize_feature=self.model.dino_head.normalize_feature).eval().to(device=self.model.device)
+                        
+            for lv2 in range(len(self.cfg.DATASETS.TEST)):
                 n_img = 0
                 print(self.cfg.DATASETS.TEST[lv2])
                 for idx, data in enumerate(test_loaders[lv2]):
                     if n_img >= n_imgs:
-                        break
+                        pass
+                        # break
                     if not len(data[0]['instances']):
                         continue
+                    if not n_img % 100:
+                        print(n_img)
                     n_img += 1
                     if mask_first:
                         cnn_dims = np.floor(np.array(data[0]['image'].shape[1:])/32).astype(int)
@@ -1610,19 +1646,22 @@ class ATeacherTrainer(DefaultTrainer):
                         curr_feats = [(dino_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
                         curr_feats_cnn = [(cnn_feat.detach().cpu().numpy()*x[-1]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
                         curr_feats_cnn_project = [(cnn_rescale_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
+                        curr_sizes = [[x[1].sum(),x[2].sum(),x[-1].sum()] for x in curr_masks]
                     # feats = self.model([data], branch="supervised", backbone_only=True)
                     # cnn_feat = self.model.dino_align(feats['vgg4'], dino_feat)
                     # loss_, sim_ = self.model.dino_align.dino_loss(cnn_feat, dino_feat, return_sim=True)
                     # source_sims.append(sim_s.squeeze().detach().cpu().numpy())
                     # if any([np.linalg.norm(x) < 0.000001 for x in curr_feats]):
                     #     a=1
+
                     curr_feats = [x/np.linalg.norm(x) for x in curr_feats]
                     instance_feats += curr_feats
                     if use_cnn:
                         norms = np.array([np.linalg.norm(x) for x in curr_feats_cnn])
                         if any(norms < 0.00000001):
                             a=1
-                        curr_feats_cnn = [x/np.linalg.norm(x) for x in curr_feats_cnn]
+                        # curr_feats_cnn = [x/np.linalg.norm(x) for x in curr_feats_cnn]
+                        curr_feats_cnn = [x/y[2] for x,y in zip(curr_feats_cnn,curr_sizes)]
                         instance_cnn_feats += curr_feats_cnn
                         curr_feats_cnn_project = [x/np.linalg.norm(x) for x in curr_feats_cnn_project]
                         instance_cnn_project_feats += curr_feats_cnn_project
@@ -1644,52 +1683,212 @@ class ATeacherTrainer(DefaultTrainer):
             data_dict = {'instance_feats':instance_feats, 'instance_class':instance_class, 'instance_area':instance_area, 'instance_dataset':instance_dataset,
                          'instance_city':instance_city, 'instance_file':instance_file, 'instances_per_dataset':instances_per_dataset,
                          'instance_cnn_feats':instance_cnn_feats, 'instance_cnn_project_feats':instance_cnn_project_feats}
-            file_out = 'dino_feats_resnet50c4_mlp_20k.pkl'
+            file_out = 'dino_feats_vgg_align_40k_new_bdd_corrscale.pkl'
+            import pickle
             with open(file_out, 'wb') as f_out:
                 pickle.dump(data_dict, f_out)
 
-            permutations = [(x,y) for x in self.cfg.DATASETS.TEST for y in range(8)]
+            # datasets = self.cfg.DATASETS.TEST
+            datasets = [str(x) for x in set(instance_dataset)]
+            datasets = [datasets[1],datasets[0]]
+            permutations = [(x,y) for x in datasets for y in range(8)]
             ids = [np.where((instance_dataset==x[0]) * (instance_class==x[1]))[0] for x in permutations]
-            datasets = self.cfg.DATASETS.TEST
             classes = ['person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcycle', 'bicycle']
             colors = ['tab:blue','tab:orange','tab:green','tab:red','tab:purple','tab:brown','tab:pink','tab:gray']
-            shapes = ['.','x','+','^','v']
-            legend =  [x + ' ' + y for x in datasets for y in classes]
+            datasets2 = ['CS','BDD']
+            # datasets2 = datasets
+            classes2 = ['person', 'rider', 'car', 'truck', 'bus', 'train', 'motor', 'bicycle']
+            if len(datasets) == 2:
+                shapes = ['.','x']
+            else:
+                shapes = ['.','x','+','^','v']
+            legend =  [x + ' ' + y for x in datasets2 for y in classes2]
 
 
-            offset = instances_per_dataset[0]
-            sim_mat = np.matmul(instance_feats,instance_feats.T)
-            k = 5
-            k_NN = np.argpartition(sim_mat[:,:offset],-k)[:,-k:]
-            k_NN_ = np.take_along_axis(k_NN, np.argsort(np.take_along_axis(sim_mat[:,:offset], k_NN, axis=1), axis=1), axis=1)
-            n = len(instance_feats)
-            confusions_acdc2city = []
-            acdc_ids = np.core.defchararray.find(instance_dataset,'ACDC')!=-1
-            k_closest_class = instance_class[k_NN_]
-            for i in range(8):
-                ids_acdc_class = (instance_class==i)*acdc_ids
-                k_closest_single = k_closest_class[ids_acdc_class,:].flatten()
-                confusions_acdc2city.append(np.array([(k_closest_single==x).sum() for x in range(8)])/len(k_closest_single))
+            # offset = instances_per_dataset[0]
+            # sim_mat = np.matmul(instance_feats,instance_feats.T)
+            # k = 5
+            # k_NN = np.argpartition(sim_mat[:,:offset],-k)[:,-k:]
+            # k_NN_ = np.take_along_axis(k_NN, np.argsort(np.take_along_axis(sim_mat[:,:offset], k_NN, axis=1), axis=1), axis=1)
+            # n = len(instance_feats)
+            # confusions_acdc2city = []
+            # acdc_ids = np.core.defchararray.find(instance_dataset,'ACDC')!=-1
+            # k_closest_class = instance_class[k_NN_]
+            # for i in range(8):
+            #     ids_acdc_class = (instance_class==i)*acdc_ids
+            #     k_closest_single = k_closest_class[ids_acdc_class,:].flatten()
+            #     confusions_acdc2city.append(np.array([(k_closest_single==x).sum() for x in range(8)])/len(k_closest_single))
 
+
+
+            
+
+
+            figsize = (0.4,3.5)
+            fig_leg = plt.figure(figsize=figsize)
+            ax_leg = fig_leg.add_subplot(111)
+            # add the legend from the previous axes
+            ax_leg.legend(*ax.get_legend_handles_labels(), loc='center')
+            # hide the axes frame and the x/y labels
+            ax_leg.axis('off')
+            plt.tight_layout()
+            # plt.savefig()
+            plt.show()
+
+            import pickle
+            file_in = 'dino_feats_vgg_noalign_20k_new_bdd_corrscale.pkl'
+            file_in2 = 'dino_feats_vgg_align_20k_new_bdd_corrscale.pkl'
+            # file_in = 'dino_feats_vgg_align_20k_new_acdcall.pkl'
+
+            with open(file_in, 'rb') as fin:
+                data_dict = pickle.load(fin)
+            instance_feats = data_dict['instance_feats']
+            instance_cnn_feats = data_dict['instance_cnn_feats']
+            instance_cnn_project_feats = data_dict['instance_cnn_project_feats']
+            instance_class = data_dict['instance_class']
+            instance_dataset = data_dict['instance_dataset']
+            instance_area = data_dict['instance_area']
+
+            with open(file_in2, 'rb') as fin:
+                data_dict2 = pickle.load(fin)
+            instance_feats2 = data_dict2['instance_feats']
+            instance_cnn_feats2 = data_dict2['instance_cnn_feats']
+            instance_cnn_project_feats2 = data_dict2['instance_cnn_project_feats']
+            instance_class2 = data_dict2['instance_class']
+            instance_dataset2 = data_dict2['instance_dataset']
+            instance_area2 = data_dict2['instance_area']
+
+            # min_size = 3
+            # max_num = 400
+            # min_size = 3
+            # max_num = 500
+            min_size = 3
+            max_num = 500
+            
 
             import matplotlib.pyplot as plt
             from sklearn.manifold import TSNE
-            offset = 0
-            model_ = TSNE(n_components=2)
-            tsne_data = model_.fit_transform(instance_feats[offset:,:])
-            plt.figure()
+            from sklearn.decomposition import PCA
+            nan_ids = set(np.where(np.isnan(instance_feats))[0].astype(int))
+            small_ids = set(np.where(np.array(instance_area)<min_size)[0])
+            # small_ids = set(np.where(np.array(instance_area)<3)[0])
+            reject_ids = nan_ids | small_ids
+            instance_feats_ = np.delete(instance_feats,list(set(reject_ids)),axis=0)
+            instance_cnn_feats_ = np.delete(instance_cnn_feats,list(set(reject_ids)),axis=0)
+            instance_cnn_project_feats_ = np.delete(instance_cnn_project_feats,list(set(reject_ids)),axis=0)
+            instance_class_ = np.delete(instance_class,list(set(reject_ids)),axis=0)
+            instance_dataset_ = np.delete(instance_dataset,list(set(reject_ids)),axis=0)
+            instance_area_ = np.delete(instance_area,list(set(reject_ids)),axis=0)
+            # ids_clean = [[x for x in y.tolist() if x not in reject_ids] for y in ids]
+            ids_ = [np.where((instance_dataset_==x[0]) * (instance_class_==x[1]))[0] for x in permutations]
+
+            nan_ids2 = set(np.where(np.isnan(instance_feats2))[0].astype(int))
+            small_ids2 = set(np.where(np.array(instance_area2)<min_size)[0])
+            # small_ids = set(np.where(np.array(instance_area)<3)[0])
+            reject_ids2 = nan_ids2 | small_ids2
+            instance_feats2_ = np.delete(instance_feats2,list(set(reject_ids2)),axis=0)
+            instance_cnn_feats2_ = np.delete(instance_cnn_feats2,list(set(reject_ids2)),axis=0)
+            instance_cnn_project_feats2_ = np.delete(instance_cnn_project_feats2,list(set(reject_ids2)),axis=0)
+            instance_class2_ = np.delete(instance_class2,list(set(reject_ids2)),axis=0)
+            instance_dataset2_ = np.delete(instance_dataset2,list(set(reject_ids2)),axis=0)
+            instance_area2_ = np.delete(instance_area2,list(set(reject_ids2)),axis=0)
+            # ids_clean = [[x for x in y.tolist() if x not in reject_ids2] for y in ids]
+            ids2_ = [np.where((instance_dataset2_==x[0]) * (instance_class2_==x[1]))[0] for x in permutations]
+
+            import random
+            ids_list = [random.sample(x.tolist(), min(max_num, len(x))) for x in ids_]
+            counts = [np.arange(len(x)) for x in ids_list]
+            counts2 = np.cumsum([0]+[x[-1]+1 if len(x) else 0 for x in counts])[:-1]
+            counts3 = [np.array(x)+y for x,y in zip(counts,counts2)]
+            new_ids = [z for y in ids_list for z in y]
+            feat_dino = instance_feats_[new_ids,:]
+            feat_cnn = instance_cnn_feats_[new_ids,:]
+            feat_class = instance_class_[new_ids]
+            feat_dataset = instance_dataset_[new_ids]
+
+            ids_list2 = [random.sample(x.tolist(), min(max_num, len(x))) for x in ids2_]
+            counts_2 = [np.arange(len(x)) for x in ids_list2]
+            counts2_2 = np.cumsum([0]+[x[-1]+1 if len(x) else 0 for x in counts_2])[:-1]
+            counts3_2 = [np.array(x)+y for x,y in zip(counts_2,counts2_2)]
+            new_ids_2 = [z for y in ids_list2 for z in y]
+            feat_dino2 = instance_feats2_[new_ids_2,:]
+            feat_cnn2 = instance_cnn_feats2_[new_ids_2,:]
+            feat_class2 = instance_class2_[new_ids_2]
+            feat_dataset2 = instance_dataset2_[new_ids_2]
+
+            # model_ = TSNE(n_components=2,perplexity=50)
+            # pca = PCA(n_components=128)
+            model_ = TSNE(n_components=2,perplexity=50)
+            pca = PCA(n_components=128)
+            new_data = pca.fit_transform(feat_dino)
+            new_datac = pca.fit_transform(feat_cnn)
+            tsne_data = model_.fit_transform(new_data)
+            tsne_datac = model_.fit_transform(new_datac)
+            new_data2 = pca.fit_transform(feat_dino2)
+            new_datac2 = pca.fit_transform(feat_cnn2)
+            tsne_data2 = model_.fit_transform(new_data2)
+            tsne_datac2 = model_.fit_transform(new_datac2)
+            a=1
+            a
+            
+            plt.figure(figsize=(6,4.5))
             lv3 = -1
             n0 = 8*lv3+8
             for i in range(n0,len(legend)):
                 perm = permutations[i]
                 if perm[1] == 0:
                     lv3 += 1
-                ids_curr = ids[i]-offset
+                ids_curr = counts3[i]
                 plt.plot(tsne_data[ids_curr,0],tsne_data[ids_curr,1],linestyle='none',marker=shapes[lv3],color=colors[perm[1]])
-            
-            plt.legend(legend)
+            plt.xticks([])
+            plt.yticks([])
+            plt.tight_layout()
+            # plt.legend(legend)
+
+            fig = plt.figure(figsize=(6,4.5))
+            ax = fig.add_subplot(111)
+            lv3 = -1
+            n0 = 8*lv3+8
+            for i in range(n0,len(legend)):
+                perm = permutations[i]
+                if perm[1] == 0:
+                    lv3 += 1
+                ids_curr = counts3[i]
+                ax.plot(tsne_datac[ids_curr,0],tsne_datac[ids_curr,1],linestyle='none',marker=shapes[lv3],color=colors[perm[1]],label=legend[i])
+            ax.set_xticks([])
+            ax.set_yticks([])
+            fig.tight_layout()
+
+            plt.figure(figsize=(6,4.5))
+            lv3 = -1
+            n0 = 8*lv3+8
+            for i in range(n0,len(legend)):
+                perm = permutations[i]
+                if perm[1] == 0:
+                    lv3 += 1
+                ids_curr = counts3_2[i]
+                plt.plot(tsne_data2[ids_curr,0],tsne_data2[ids_curr,1],linestyle='none',marker=shapes[lv3],color=colors[perm[1]])
+            plt.xticks([])
+            plt.yticks([])
+            plt.tight_layout()
+            # plt.legend(legend)
+
+            fig = plt.figure(figsize=(6,4.5))
+            ax = fig.add_subplot(111)
+            lv3 = -1
+            n0 = 8*lv3+8
+            for i in range(n0,len(legend)):
+                perm = permutations[i]
+                if perm[1] == 0:
+                    lv3 += 1
+                ids_curr = counts3_2[i]
+                ax.plot(tsne_datac2[ids_curr,0],tsne_datac2[ids_curr,1],linestyle='none',marker=shapes[lv3],color=colors[perm[1]],label=legend[i])
+            ax.set_xticks([])
+            ax.set_yticks([])
+            fig.tight_layout()            
             plt.show()
-            a=1
+
+
                 # source_strong, source_weak, rs1, target_strong, target_weak, sr2 = data
 
                 # _, _ = self.model(source_weak, branch="supervised")
@@ -1819,9 +2018,13 @@ class ATeacherTrainer(DefaultTrainer):
                     masks = [(y.item(),x.float(),torch.nn.functional.avg_pool2d(x.float().unsqueeze(0),patch_size).squeeze().numpy(),img['file_name'],z.clamp(min=0, max=1).squeeze().numpy()) for x,y,z in zip(img['instances'].gt_masks,img['instances'].gt_classes,cnn_interp)] 
                 else:
                     c, h, w = img['image'].shape
-                    polygons = [polygons_to_bitmask(x, h, w).astype(float) for x in img['instances'].gt_masks.polygons]
-                    cnn_interp = [torch.nn.functional.interpolate(torch.tensor(x).unsqueeze(0).unsqueeze(0),size=cnn_dims,mode='bicubic',antialias=True) for x in img['instances'].gt_masks]
-                    masks = [(y.item(),x,torch.nn.functional.avg_pool2d(torch.tensor(x).unsqueeze(0),patch_size).squeeze().numpy(),img['file_name']) for x,y,z in zip(polygons,img['instances'].gt_classes,cnn_interp)] 
+                    polygons = [np.vstack(x) for x in img['instances'].gt_masks]
+                    # polygons = [polygons_to_bitmask(x, h, w).astype(float) for x in img['instances'].gt_masks.polygons]
+                    # is_instance = np.where([x.sum() > 0 for x in polygons])[0].tolist()
+                    # polygons = [x for x,y in zip(polygons,is_instance) if y]
+                    # img['instances'] = img['instances'][is_instance]
+                    cnn_interp = [torch.nn.functional.interpolate(torch.tensor(x).unsqueeze(0).unsqueeze(0),size=cnn_dims,mode='bicubic',antialias=True).squeeze() for x in polygons]
+                    masks = [(y.item(),x,torch.nn.functional.avg_pool2d(torch.tensor(x).unsqueeze(0),patch_size).squeeze().numpy(),img['file_name'],z.clamp(min=0,max=1).numpy()) for x,y,z in zip(polygons,img['instances'].gt_classes,cnn_interp)] 
                 # mask_fg = sum([polygons_to_bitmask(x, h, w) for x in img['instances'].gt_masks.polygons]).astype(bool).astype(float)
                 # mask_small = torch.nn.functional.avg_pool2d(torch.tensor(mask_fg).unsqueeze(0),patch_size).squeeze().numpy()
                 out.append(masks)
@@ -2623,8 +2826,8 @@ def temp_plots():
     import matplotlib
     from detectron2.utils.visualizer import Visualizer
     names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
-    curr_id = 0
-    curr_data = unlabel_data_k
+    curr_id = 1
+    curr_data = label_data_k
     # curr_data = all_label_data
     img_ = curr_data[curr_id]['image'].transpose(0,1).transpose(1,2)
 
@@ -3133,8 +3336,14 @@ def test_object_coloring():
 
 
     from detectron2.utils.visualizer import Visualizer
-    img_data = next(test_loaders[1])
+    classes = [1,4,5,6,7]
+    while True:
+        img_data = next(test_loaders[1])
+        good = [x in classes for x in img_data[0]['instances'].gt_classes]
+        if any(good):
+            break
 
+    self.model.proposal_generator.pre_nms_topk[False] = 9000
     img_temp = img_data[0]['image'].detach().cpu().transpose(0,1).transpose(1,2)[:,:,[2,1,0]]
     images = self.model.preprocess_image(img_data)
     features = self.model.backbone(images.tensor)
@@ -3159,18 +3368,18 @@ def test_object_coloring():
     proposals, keeps, proposal_idx, proposals_old = self.model.proposal_generator.predict_proposals(
         anchors, pred_objectness_logits, pred_anchor_deltas, images.image_sizes
     )
+    final_ids = proposal_idx[0][0,keeps[0][1]].detach().cpu()
     deltas = (proposals_old[0].squeeze() - anchors[0].tensor).detach().cpu()
-    sorted_ids = deltas[final_ids[:20],:].sum(dim=1).abs().argsort()
-    final_ids = proposal_idx[0][0,keeps[0]].detach().cpu()
+    sorted_ids = deltas[final_ids[:100],:].sum(dim=1).abs().argsort()
 
-    test = proposals_old[0].squeeze().reshape(17,30,15,4)
-    temp = test[8,3,:,:].detach().cpu()
-
+    # test = proposals_old[0].squeeze().reshape(17,30,15,4)
+    # temp = test[8,3,:,:].detach().cpu()
 
     test_v = Visualizer(img_temp)
-    temp = proposals[0][sorted_ids[:12]].proposal_boxes.tensor.detach().cpu()
+    temp = proposals[0][sorted_ids].proposal_boxes.tensor.detach().cpu()
     test_v.overlay_instances(boxes=temp, labels=range(temp.shape[0]))
     img2 = test_v.get_output().get_image()
+    plt.figure();plt.imshow(img2)
 
     proposals_roih, ROI_predictions = self.model.roi_heads(
         images,
@@ -3182,9 +3391,21 @@ def test_object_coloring():
     )
 
     temp2 = proposals_roih[0].pred_boxes.tensor.detach().cpu()
+    labels2 = proposals_roih[0].pred_classes.detach().cpu()
+    names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
+    labels2 = [names[x] for x in labels2]
     test_v = Visualizer(img_temp)
-    test_v.overlay_instances(boxes=temp2, labels=range(temp2.shape[0]))
+    test_v.overlay_instances(boxes=temp2, labels=labels2)
     img3 = test_v.get_output().get_image()
+    plt.figure();plt.imshow(img3)
+
+    test_v = Visualizer(img_temp)
+    temp3 = img_data[0]['instances'].gt_boxes.tensor.detach().cpu()
+    labels3 = img_data[0]['instances'].gt_classes.detach().cpu()
+    labels3 = [names[x] for x in labels3]
+    test_v.overlay_instances(boxes=temp3, labels=labels3)
+    img3 = test_v.get_output().get_image()
+    plt.figure();plt.imshow(img3)
 
 
 
@@ -3326,68 +3547,108 @@ def tens2img(x):
     # test_v2.overlay_instances(boxes=temp2, labels=labels2)
     # img2 = test_v2.get_output().get_image()
 
-# def test1245(a):
-#     self.model = self.model.eval()
-#     from PIL import Image 
-#     with torch.no_grad():
+def test1245(a):
+    import matplotlib.pyplot as plt
+    if not hasattr(self.model, 'dino_head'):
+        self.model.dino_head = DinoV2VitFeatureExtractor(self.cfg, model_name=self.cfg.SEMISUPNET.DINO_MODEL, normalize_feature=self.cfg.SEMISUPNET.DINO_LOSS_NORM).eval().to(device=self.model.device)
+        self.dino_layer = self.cfg.SEMISUPNET.DIS_TYPE
+        cnn_dim = self.model.backbone._out_feature_channels[self.cfg.SEMISUPNET.DIS_TYPE]
+        dino_dim = [*self.model.dino_head.modules()][-2].normalized_shape[0]
+        self.model.dino_align = DinoAlignHead(self.cfg, cnn_dim, dino_dim, normalize_feature=self.model.dino_head.normalize_feature).eval().to(device=self.model.device)      
+    self.model = self.model.eval()
+    from PIL import Image 
+    with torch.no_grad():
         
-#         image_path = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes/leftImg8bit/train/aachen/aachen_000010_000019_leftImg8bit.png'
-#         img1_ = np.array(Image.open(image_path).resize((1596,798)))
-#         img1_[392:406,490:504,:] = [255,100,200]
-#         img1 = torch.tensor(img1_)[:,:798,[2,1,0]].transpose(1,2).transpose(0,1)
-#         # image_path = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/leftImg8bit/train/aachen/aachen_000012_000019_leftImg8bit_foggy_beta_0.02.png'
-#         image_path = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/bdd/images/train/0a3e70d1-a515ffaf.jpg'
-#         img2_ = np.array(Image.open(image_path).resize((1596,798)))
-#         img2 = torch.tensor(img2_)[:,-798:,[2,1,0]].transpose(1,2).transpose(0,1)
-#         img_dict = [{'image':img1},{'image':img2}]
-#         dino_feat = self.model.dino_head(img_dict).detach().cpu()
-#         cnn_feat = self.model.backbone(self.model.preprocess_image(img_dict).tensor)['res5'].detach().cpu()
-#         ndino = torch.nn.functional.normalize(dino_feat,dim=1).transpose(1,3).transpose(1,2)
-#         ncnn = torch.nn.functional.normalize(dino_feat,dim=1).transpose(1,3).transpose(1,2)
-#         point = ndino[0,28,35,:]
-#         dino2 = (ndino*point).sum(dim=-1).numpy()
-#         pointc = ncnn[0,25,32,:]
-#         cnn2 = (ncnn*pointc).sum(dim=-1).numpy()
+        image_path = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes/leftImg8bit/train/aachen/aachen_000010_000019_leftImg8bit.png'
+        img1_ = np.array(Image.open(image_path).resize((1596,798)))
+        # img1_[392:406,490:504,:] = [255,100,200]
+        # img1 = torch.tensor(img1_)[:,:798,[2,1,0]].transpose(1,2).transpose(0,1)
+        img1 = torch.tensor(img1_)[:,:,[2,1,0]].transpose(1,2).transpose(0,1)
+        # image_path = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/cityscapes_foggy/leftImg8bit/train/aachen/aachen_000012_000019_leftImg8bit_foggy_beta_0.02.png'
+        image_path = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/datasets/bdd/images/train/0a3e70d1-a515ffaf.jpg'
+        img2_ = np.array(Image.open(image_path).resize((1596,798)))
+        # img2 = torch.tensor(img2_)[:,-798:,[2,1,0]].transpose(1,2).transpose(0,1)
+        # img2_ = np.array(Image.open(image_path))
+        img2 = torch.tensor(img2_)[:,:,[2,1,0]].transpose(1,2).transpose(0,1)
+        img_dict = [{'image':img1},{'image':img2}]
+        dino_feat = self.model.dino_head(img_dict).detach().cpu()
+        cnn_feat = self.model.backbone(self.model.preprocess_image(img_dict).tensor)['res5'].detach().cpu()
+        ndino = torch.nn.functional.normalize(dino_feat,dim=1).transpose(1,3).transpose(1,2)
+        ncnn = torch.nn.functional.normalize(cnn_feat,dim=1).transpose(1,3).transpose(1,2)
+        point = ndino[0,28,35,:]
+        dino2 = (ndino*point).sum(dim=-1).numpy()
+        pointc = ncnn[0,25,31,:]
+        cnn2 = (ncnn*pointc).sum(dim=-1).numpy()
 
 
-#         plt.figure()
-#         plt.imshow(dino2[0,:,:])
-#         plt.figure()
-#         plt.imshow(img1_[:,:798,:])
-#         plt.figure()
-#         plt.imshow(dino2[1,:,:])
-#         plt.figure()
-#         plt.imshow(img1_[:,-798:,:])
+        plt.figure()
+        plt.imshow(img1_[:,:,:])
+        plt.figure()
+        plt.imshow(dino2[0,:,:])
+        plt.figure()
+        plt.imshow(dino2[1,:,:])
 
-#         plt.rcParams["font.family"] = "serif"
-#         plt.rcParams.update({'font.size': 14})
-#         fig, axs = plt.subplots(2,2)
-#         axs[0,0].imshow(img1_[:,:798,:])
-#         axs[0,1].imshow(img2_[:,-798:,:])
-#         axs[1,0].imshow(dino2[0,:,:])
-#         axs[1,1].imshow(dino2[1,:,:])
-#         axs[0,0].set_axis_off()
-#         axs[0,1].set_axis_off()
-#         axs[1,0].set_axis_off()
-#         axs[1,1].set_axis_off()
-#         axs[0,0].set_title('Cityscapes')
-#         axs[0,1].set_title('BDD100k')
-#         plt.show()
+        plt.figure()
+        plt.imshow(img2_[:,:,:])
+        plt.figure()
+        plt.imshow(cnn2[0,:,:])
+        plt.figure()
+        plt.imshow(cnn2[1,:,:])
+        plt.show()
 
-#         plt.figure()
-#         plt.imshow(dino2[1,:,:],vmax=1)
-#         plt.figure()
-#         plt.imshow(cnn2[0,:,:])
-#         plt.figure()
-#         plt.imshow(cnn2[1,:,:],vmax=1)
-#         plt.show()
+
+        plt.figure()
+        plt.imshow(dino2[0,7:-10,:])
+        plt.figure()
+        plt.imshow(img1_[:,98:-140,98:980])
+        plt.figure()
+        plt.imshow(dino2[1,:,:])
+        plt.figure()
+        plt.imshow(img1_[:,-798:,:])
+
+        plt.rcParams["font.family"] = "serif"
+        plt.rcParams.update({'font.size': 14})
+        fig, axs = plt.subplots(3,2)
+        axs[0,0].imshow(img1_[168:-98,98:980,:])
+        axs[0,1].imshow(img2_[168:-98,-882:,:])
+        axs[1,0].imshow(dino2[0,12:-7,7:70])
+        axs[1,1].imshow(dino2[1,12:-7,-63:])
+        axs[2,0].imshow(cnn2[0,11:-6,6:61])
+        axs[2,1].imshow(cnn2[1,11:-6,-55:])
+        axs[0,0].set_yticks([])
+        axs[0,1].set_yticks([])
+        axs[1,0].set_yticks([])
+        axs[1,1].set_yticks([])
+        axs[2,0].set_yticks([])
+        axs[2,1].set_yticks([])
+        axs[0,0].set_xticks([])
+        axs[0,1].set_xticks([])
+        axs[1,0].set_xticks([])
+        axs[1,1].set_xticks([])
+        axs[2,0].set_xticks([])
+        axs[2,1].set_xticks([])
+        axs[1,0].set_ylabel('DINOv2')
+        axs[2,0].set_ylabel('EMA Teacher')
+        axs[0,0].set_title('Cityscapes')
+        axs[0,1].set_title('BDD100k')
+        plt.subplots_adjust(left=0.052,bottom=0.021,right=1,top=0.933,wspace=0,hspace=0.055)
+        plt.show()
+
+        max_val = max((dino2[1,:,:].max(),cnn2[1,:,:].max()))
+        plt.figure()
+        plt.imshow(dino2[1,:,:],vmax=max_val)
+        plt.figure()
+        plt.imshow(cnn2[0,:,:])
+        plt.figure()
+        plt.imshow(cnn2[1,:,:],vmax=max_val)
+        plt.show()
     
 
-#     cnn_rescale_feat = self.model.dino_align(cnn_feat, dino_feat)
-#     curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size,cnn_dims=cnn_feat.shape[2:], box_mask=use_bbox)[0]
-#     curr_feats = [(dino_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
-#     curr_feats_cnn = [(cnn_feat.detach().cpu().numpy()*x[-1]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
-#     curr_feats_cnn_project = [(cnn_rescale_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
+    cnn_rescale_feat = self.model.dino_align(cnn_feat, dino_feat)
+    curr_masks = self.get_fg_mask(data, patch_size=self.model.dino_head.patch_size,cnn_dims=cnn_feat.shape[2:], box_mask=use_bbox)[0]
+    curr_feats = [(dino_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
+    curr_feats_cnn = [(cnn_feat.detach().cpu().numpy()*x[-1]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
+    curr_feats_cnn_project = [(cnn_rescale_feat.detach().cpu().numpy()*x[2]).squeeze(0).sum(axis=(1,2)) for x in curr_masks]
 
 
 def img_boxes():
@@ -3422,6 +3683,9 @@ def img_boxes():
     test_v = Visualizer(img1_)
     test_v.overlay_instances(boxes=boxes, labels=classes)
     img = test_v.get_output().get_image()
+
+
+
     plt.figure()
     plt.imshow(img)
     plt.show()

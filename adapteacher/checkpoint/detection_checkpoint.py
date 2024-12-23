@@ -6,6 +6,12 @@ from detectron2.checkpoint import DetectionCheckpointer
 from typing import Any
 from fvcore.common.checkpoint import _strip_prefix_if_present, _IncompatibleKeys
 
+import logging
+from collections import OrderedDict
+from torch.nn.parallel import DistributedDataParallel
+import os
+from detectron2.utils import comm
+from urllib.parse import urlparse
 
 class DetectionTSCheckpointer(DetectionCheckpointer):
     def _load_model(self, checkpoint):
@@ -90,6 +96,27 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
                         pass
             return incompatible
 
+        elif 'pos_embed' in checkpoint['model'].keys(): # transformer
+            new_key = []
+            new_vals = []
+            for key, value in checkpoint['module'].items():
+                new_key.append('model.backbone.net.' + key)
+                new_vals.append(value)
+            checkpoint['model'] = OrderedDict(zip(new_key,new_vals))
+            incompatible = self._load_student_model(checkpoint)
+
+            model_buffers = dict(self.model.modelStudent.named_buffers(recurse=False))
+            for k in ["pixel_mean", "pixel_std"]:
+                # Ignore missing key message about pixel_mean/std.
+                # Though they may be missing in old checkpoints, they will be correctly
+                # initialized from config anyway.
+                if k in model_buffers:
+                    try:
+                        incompatible.missing_keys.remove(k)
+                    except ValueError:
+                        pass
+            return incompatible
+
         else:  # whole model
             if checkpoint.get("matching_heuristics", False):
                 self._convert_ndarray_to_tensor(checkpoint["model"])
@@ -151,6 +178,89 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
             unexpected_keys=incompatible.unexpected_keys,
             incorrect_shapes=incorrect_shapes,
         )
+    
+    def load1(self, path, *args, **kwargs):
+        assert self._parsed_url_during_load is None
+        need_sync = False
+        logger = logging.getLogger(__name__)
+        logger.info("[DetectionCheckpointer] Loading from {} ...".format(path))
+
+        if path and isinstance(self.model, DistributedDataParallel):
+            path = self.path_manager.get_local_path(path)
+            has_file = os.path.isfile(path)
+            all_has_file = comm.all_gather(has_file)
+            if not all_has_file[0]:
+                raise OSError(f"File {path} not found on main worker.")
+            if not all(all_has_file):
+                logger.warning(
+                    f"Not all workers can read checkpoint {path}. "
+                    "Training may fail to fully resume."
+                )
+                # TODO: broadcast the checkpoint file contents from main
+                # worker, and load from it instead.
+                need_sync = True
+            if not has_file:
+                path = None  # don't load if not readable
+
+        if path:
+            parsed_url = urlparse(path)
+            self._parsed_url_during_load = parsed_url
+            path = parsed_url._replace(query="").geturl()  # remove query from filename
+            path = self.path_manager.get_local_path(path)
+        ret = self.load2(path, *args, **kwargs)
+
+        if need_sync:
+            logger.info("Broadcasting model states from main worker ...")
+            self.model._sync_params_and_buffers()
+        self._parsed_url_during_load = None  # reset to None
+        return ret
+
+    def load2(self, path, checkpointables=None):
+        """
+        Load from the given checkpoint.
+
+        Args:
+            path (str): path or url to the checkpoint. If empty, will not load
+                anything.
+            checkpointables (list): List of checkpointable names to load. If not
+                specified (None), will load all the possible checkpointables.
+        Returns:
+            dict:
+                extra data loaded from the checkpoint that has not been
+                processed. For example, those saved with
+                :meth:`.save(**extra_data)`.
+        """
+        if not path:
+            # no checkpoint provided
+            self.logger.info("No checkpoint found. Initializing model from scratch")
+            return {}
+        self.logger.info("[Checkpointer] Loading from {} ...".format(path))
+        if not os.path.isfile(path):
+            path = self.path_manager.get_local_path(path)
+            assert os.path.isfile(path), "Checkpoint {} not found!".format(path)
+
+        checkpoint = self._load_file(path)
+        if 'eva' in path.rsplit('/',1)[1]:
+            new_key = []
+            new_vals = []
+            for key, value in checkpoint['module'].items():
+                new_key.append('backbone.net.' + key)
+                new_vals.append(value)
+            checkpoint['model'] = OrderedDict(zip(new_key,new_vals))
+        incompatible = self._load_model(checkpoint)
+        if (
+            incompatible is not None
+        ):  # handle some existing subclasses that returns None
+            self._log_incompatible_keys(incompatible)
+
+        for key in self.checkpointables if checkpointables is None else checkpointables:
+            if key in checkpoint:
+                self.logger.info("Loading {} from {} ...".format(key, path))
+                obj = self.checkpointables[key]
+                obj.load_state_dict(checkpoint.pop(key))
+
+        # return any further checkpoint data
+        return checkpoint
 
 
 # class DetectionCheckpointer(Checkpointer):

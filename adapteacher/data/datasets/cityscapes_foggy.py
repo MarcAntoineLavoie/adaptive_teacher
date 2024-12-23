@@ -324,3 +324,61 @@ def load_BDD_instances(gt_dir):
             anno.pop('segmentation')
             anno["category_id"] = anno['class_id']
     return data_dict
+
+
+def load_BDD_seg_instances(gt_dir):
+    with open(gt_dir, 'rb') as fin:
+        data_dict = json.load(fin)
+
+    image_root = './datasets/bdd/images/bdd10k/'
+    if 'train' in gt_dir:
+        image_root += 'train/'
+    elif 'val' in gt_dir:
+        image_root += 'val/'
+    else:
+        raise Exception("non-standard path to dataset")
+
+
+    img_count = 0
+    img_set = {-1:[]}
+    det_list = []
+    printed = False
+    for idx, anno in enumerate(data_dict['annotations']):
+        if not img_count % 100 and not printed:
+            print(img_count)
+            printed = True
+        anno_box = mask_util.toBbox(anno['segmentation'])
+        anno_box[2] = anno_box[0]+anno_box[2]
+        anno_box[3] = anno_box[1]+anno_box[3]
+
+        # anno_masks = mask_util.decode(anno['segmentation'])
+        # contours = cv2.findContours(anno_masks.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[-2]
+        # # contours[0] = np.vstack([contours[0],contours[0][0,0,:]])s
+        # polygons = [c.reshape(-1).tolist() for c in contours if len(c) >= 3]
+        # # opencv's can produce invalid polygons
+        # if len(polygons) == 0:
+        #     continue
+
+        img_id = anno['image_id'] - 1
+        if img_id in img_set.keys():
+            list_id = img_set[img_id]
+        else:
+            img_set[img_id] = img_count
+            img_name = image_root + data_dict['images'][img_id]['file_name']
+            img_height = data_dict['images'][img_id]['height']
+            img_width = data_dict['images'][img_id]['width']
+            assert img_id == data_dict['images'][img_id]['id'] - 1
+            det_list.append({'file_name': img_name, 
+                             'image_id': img_id, 
+                             'height': img_height, 
+                             'width': img_width, 
+                             'annotations': []})
+            list_id = img_set[img_id]
+            img_count += 1
+            printed = False
+
+        new_anno = {'iscrowd':bool(anno['iscrowd']), 'category_id': anno['category_id']-1, 'bbox':anno_box, 'bbox_mode': BoxMode.XYXY_ABS, 'segmentation':anno['segmentation']}
+        det_list[list_id]['annotations'].append(new_anno)
+    img_set.pop(-1, None)
+
+    return det_list

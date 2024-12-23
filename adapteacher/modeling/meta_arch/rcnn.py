@@ -22,6 +22,7 @@ from detectron2.structures import ImageList, Instances
 from detectron2.layers import Conv2d
 from detectron2.layers import get_norm
 import fvcore.nn.weight_init as weight_init
+from detectron2.config import instantiate
 
 ############### Image discriminator ##############
 class FCDiscriminator_img(nn.Module):
@@ -298,12 +299,13 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         else:
             gt_instances = None
 
-        features_ = self.backbone(images.tensor)
-        features = {}
-        if self.integrated_proj:
-            features[self.dis_type] = self.proj_layer(features_[self.dis_type])
-        else:
-            features[self.dis_type] = features_[self.dis_type]
+        features = self.backbone(images.tensor)
+        # features = {}
+        # for key in features_.keys():
+        #     if self.integrated_proj:
+        #         features[key] = self.proj_layer(features_[key])
+        #     else:
+        #         features[key] = features_[key.dis_type]
         # features = self.backbone(images.tensor)
         # if self.integrated_proj:
         #     features[self.dis_type] = self.proj_layer(features[self.dis_type])
@@ -481,12 +483,13 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         assert not self.training
 
         images = self.preprocess_image(batched_inputs)
-        features_ = self.backbone(images.tensor)
-        features = {}
-        if self.integrated_proj:
-            features[self.dis_type] = self.proj_layer(features_[self.dis_type])
-        else:
-            features[self.dis_type] = features_[self.dis_type]
+        features = self.backbone(images.tensor)
+        # features_ = self.backbone(images.tensor)
+        # features = {}
+        # if self.integrated_proj:
+        #     features[self.dis_type] = self.proj_layer(features_[self.dis_type])
+        # else:
+        #     features[self.dis_type] = features_[self.dis_type]
 
         if detected_instances is None:
             if self.proposal_generator is not None:
@@ -1406,6 +1409,20 @@ class DinoV2VitFeatureExtractor_wrapper(DinoV2VitFeatureExtractor):
         output = ShapeSpec(channels = self._out_feature_channels[self.output_layer], stride=self._out_feature_strides[self.output_layer])
         return {self.output_layer: output}
 
+    def preprocess_image_train(self, batched_inputs: List[Dict[str, torch.Tensor]]):
+        """
+        Normalize, pad and batch the input images.
+        """
+        images = [x["image"].to(self.device) for x in batched_inputs]
+        images = [(x - self.pixel_mean) / self.pixel_std for x in images]
+        images = ImageList.from_tensors(images, self.size_divisibility)
+
+        images_t = [x["image_unlabeled"].to(self.device) for x in batched_inputs]
+        images_t = [(x - self.pixel_mean) / self.pixel_std for x in images_t]
+        images_t = ImageList.from_tensors(images_t, self.size_divisibility)
+
+        return images, images_t
+
     def forward(self, x):
         x = x[:,[2,1,0],:,:]
         batch_size, _, height, width = x.size()
@@ -1425,6 +1442,177 @@ class DinoV2VitFeatureExtractor_wrapper(DinoV2VitFeatureExtractor):
         x_grid_features = x.contiguous().transpose(1, 2).contiguous().view(batch_size, self.embed_dim, f_height, f_width)
 
         return {self.output_layer: x_grid_features}
+
+class lazy_model_wrapper(nn.Module):
+    def __init__(self, cfg):
+        super(lazy_model_wrapper, self).__init__()
+        self.model = instantiate(cfg.model)
+        for param in self.model.backbone.net.parameters():
+            param.requires_grad = False
+        self.model.to(torch.device('cuda'))
+        self.device = self.model.device
+        self.pixel_mean = torch.tensor(cfg.model.pixel_mean).to(device=self.device).reshape(3,1,1)
+        self.pixel_std = torch.tensor(cfg.model.pixel_std).to(device=self.device).reshape(3,1,1)
+        self.backbone = self.model.backbone
+        self.size_divisibility = 32
+        # self.neck = model.neck
+        # self.transformer = model.transformer
+
+        self._register_output_hook(self.model, 'backbone.net')
+
+    def _get_bbone_output_hook(self, module, input, output):
+        self.backbone_feat = output
+
+    def _register_output_hook(self, model, target_layer):
+        for (name, module) in model.named_modules():
+            if name == target_layer:
+                module.register_forward_hook(self._get_bbone_output_hook)
+        return True
+
+    def preprocess_image(self, batched_inputs):
+        """
+        Normalize, pad and batch the input images.
+        """
+        images = [x["image"].to(self.device) for x in batched_inputs]
+        images = [(x - self.pixel_mean) / self.pixel_std for x in images]
+        images = ImageList.from_tensors(images, self.backbone.size_divisibility)
+
+        return images
+
+
+    def forward(self, batched_inputs, branch=None):
+        if not self.training:
+            outputs = self.model(batched_inputs)
+            return outputs
+
+        else:
+            loss_dict = self.model(batched_inputs)
+            return loss_dict, [], [], None
+
+
+        # images = self.preprocess_image(batched_inputs)
+
+        # if "instances" in batched_inputs[0]:
+        #     gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+        # else:
+        #     gt_instances = None
+
+        # losses = self.model(images.tensor)
+
+        # features = self.backbone(images.tensor)
+        # if branch == "supervised":
+        #     features_s = grad_reverse(features[self.dis_type])
+        #     D_img_out_s = self.D_img(features_s)
+        #     loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
+
+            
+        #     # Region proposal network
+        #     proposals_rpn, proposal_losses = self.proposal_generator(
+        #         images, features, gt_instances
+        #     )
+
+        #     # roi_head lower branch
+        #     _, detector_losses = self.roi_heads(
+        #         images,
+        #         features,
+        #         proposals_rpn,
+        #         compute_loss=True,
+        #         targets=gt_instances,
+        #         branch=branch,
+        #     )
+
+        #     # visualization
+        #     if self.vis_period > 0:
+        #         storage = get_event_storage()
+        #         if storage.iter % self.vis_period == 0:
+        #             self.visualize_training(batched_inputs, proposals_rpn, branch)
+
+        #     losses = {}
+        #     losses.update(detector_losses)
+        #     losses.update(proposal_losses)
+        #     losses["loss_D_img_s"] = loss_D_img_s*0.001
+        #     print([x.item() for x in proposal_losses.values()])
+        #     return losses, [], [], None
+
+        # elif branch == "supervised_target":
+
+        #     # features_t = grad_reverse(features_t[self.dis_type])
+        #     # D_img_out_t = self.D_img(features_t)
+        #     # loss_D_img_t = F.binary_cross_entropy_with_logits(D_img_out_t, torch.FloatTensor(D_img_out_t.data.size()).fill_(target_label).to(self.device))
+
+            
+        #     # Region proposal network
+        #     proposals_rpn, proposal_losses = self.proposal_generator(
+        #         images, features, gt_instances
+        #     )
+
+        #     # roi_head lower branch
+        #     _, detector_losses = self.roi_heads(
+        #         images,
+        #         features,
+        #         proposals_rpn,
+        #         compute_loss=True,
+        #         targets=gt_instances,
+        #         branch=branch,
+        #     )
+
+        #     # visualization
+        #     if self.vis_period > 0:
+        #         storage = get_event_storage()
+        #         if storage.iter % self.vis_period == 0:
+        #             self.visualize_training(batched_inputs, proposals_rpn, branch)
+
+        #     losses = {}
+        #     losses.update(detector_losses)
+        #     losses.update(proposal_losses)
+        #     # losses["loss_D_img_t"] = loss_D_img_t*0.001
+        #     # losses["loss_D_img_s"] = loss_D_img_s*0.001
+        #     return losses, [], [], None
+
+        # elif branch == "unsup_data_weak":
+        #     """
+        #     unsupervised weak branch: input image without any ground-truth label; output proposals of rpn and roi-head
+        #     """
+        #     # Region proposal network
+        #     proposals_rpn, _ = self.proposal_generator( 
+        #         images, features, None, compute_loss=False
+        #     )
+
+        #     # roi_head lower branch (keep this for further production)
+        #     # notice that we do not use any target in ROI head to do inference!
+        #     proposals_roih, ROI_predictions = self.roi_heads(
+        #         images,
+        #         features,
+        #         proposals_rpn,
+        #         targets=None,
+        #         compute_loss=False,
+        #         branch=branch,
+        #     )
+
+        #     # if self.vis_period > 0:
+        #     #     storage = get_event_storage()
+        #     #     if storage.iter % self.vis_period == 0:
+        #     #         self.visualize_training(batched_inputs, proposals_rpn, branch)
+
+        #     return {}, proposals_rpn, proposals_roih, ROI_predictions
+
+        # return self.model.forward(x)
+
+        # # if cfg.SEMISUPNET.USE_DINO:
+        # #     freeze = False
+        # # else:
+        # #     freeze = True
+        # # super(DinoV2VitFeatureExtractor_wrapper, self).__init__(cfg, model_name=cfg.SEMISUPNET.DINO_MODEL, normalize_feature=False, freeze=freeze)
+        # # self.output_layer = output_layer
+        # # self._out_feature_channels = {self.output_layer:self.encoder.blocks[-1].norm2.bias.shape[0]}
+        # # self._out_feature_strides = {self.output_layer:self.patch_size}
+        # # self.size_divisibility = 0
+        # # self.padding_constraints = {}
+        # # self.encoder.mask_token.requires_grad = False
+    
+    def output_shape(self):
+        return self.model.backbone.net.output_shape()
+    
 
 @META_ARCH_REGISTRY.register()
 class TwoTrunksRCNNN(GeneralizedRCNN):

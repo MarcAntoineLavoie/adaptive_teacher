@@ -8,7 +8,7 @@ from iopath.common.file_io import PathManager
 
 from detectron2.data.datasets.pascal_voc import register_pascal_voc
 from detectron2.data.datasets.builtin_meta import _get_builtin_metadata
-from .cityscapes_foggy import load_cityscapes_instances, load_ACDC_instances, load_BDD_instances
+from .cityscapes_foggy import load_cityscapes_instances, load_ACDC_instances, load_BDD_instances, load_BDD_seg_instances
 import io
 import logging
 
@@ -236,6 +236,22 @@ def register_BDD(root):
             image_dir=image_dir, gt_dir=gt_file, evaluator_type="coco", **meta
         )
 
+_RAW_BDD_SEG_SPLITS = {
+    "BDD_seg_train": ("bdd/images/bdd10k/train/", "bdd/labels/bdd10k/train/ins_seg_train_coco.json"),
+    "BDD_seg_val": ("bdd/images/bdd10k/val/", "bdd/labels/bdd10k/val/ins_seg_val_coco.json"),
+    }
+
+def register_BDD_seg(root):
+    for key, (image_dir, gt_file) in _RAW_BDD_SEG_SPLITS.items():
+        meta = _get_builtin_metadata("cityscapes")
+        image_dir = os.path.join(root, image_dir)
+        gt_file = os.path.join(root, gt_file)
+
+        inst_key = key
+        DatasetCatalog.register(inst_key, lambda x=gt_file: load_BDD_seg_instances(x),)
+        MetadataCatalog.get(inst_key).set(
+            image_dir=image_dir, gt_dir=gt_file, evaluator_type="coco", **meta
+        )
 
 _RAW_BDD_WEATHER_SPLITS = {
     "BDD_dayclear_train": ("diverse_weather/Daytime_Sunny/JPEGImages/", "diverse_weather/Daytime_Sunny/labels/img_annos_train.pkl"),
@@ -261,5 +277,6 @@ register_all_clipart(_root)
 register_all_water(_root)
 register_ACDC(_root)
 register_BDD(_root)
+register_BDD_seg(_root)
 register_BDD_weather(_root)
 
