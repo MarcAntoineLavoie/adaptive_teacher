@@ -173,7 +173,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
     @classmethod
     def from_config(cls, cfg):
         backbone = build_backbone(cfg)
-        dino_out_dim_dict = {'dinov2_vits14':384,'dinov2_vitb14':768,'dinov2_vitl14':1024,'dinov2_vitg14':1536}
+        dino_out_dim_dict = {'dinov2_vits14':384,'dinov2_vitb14':768,'dinov2_vitl14':1024,'dinov2_vitg14':1536,'dinov2_vitb14_reg4':768}
         if cfg.SEMISUPNET.DINO_HEAD == 'integrated':
             dino_size = dino_out_dim_dict[cfg.SEMISUPNET.DINO_MODEL]
             feat_key = list(backbone.output_shape().keys())[-1]
@@ -1390,7 +1390,7 @@ class DINOgenRCNNN(GeneralizedRCNN):
     
 class DinoV2VitFeatureExtractor_wrapper(DinoV2VitFeatureExtractor):
     def __init__(self, cfg, output_layer='dino_out'):
-        if cfg.SEMISUPNET.USE_DINO:
+        if cfg.SEMISUPNET.USE_DINO and cfg.SEMISUPNET.DINO_LR_SCALE:
             freeze = False
         else:
             freeze = True
@@ -1400,6 +1400,7 @@ class DinoV2VitFeatureExtractor_wrapper(DinoV2VitFeatureExtractor):
         self._out_feature_strides = {self.output_layer:self.patch_size}
         self.size_divisibility = 0
         self.padding_constraints = {}
+        self.encoder.mask_token.requires_grad = False
     
     def output_shape(self):
         output = ShapeSpec(channels = self._out_feature_channels[self.output_layer], stride=self._out_feature_strides[self.output_layer])

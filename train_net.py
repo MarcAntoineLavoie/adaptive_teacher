@@ -52,7 +52,9 @@ def setup(args):
         # cfg.TEST.EVAL_PERIOD = 20
         # cfg.DATASETS.TEST = ("cityscapes_val","cityscapes_foggy_val","ACDC_val_rain","ACDC_val_fog")
         # cfg.DATASETS.TEST = ("cityscapes_val",)
-        cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_rain")
+        # cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_rain")
+        cfg.DATASETS.TEST = ("BDD_day_train",)
+        # cfg.DATASETS.TEST = ("BDD_nightclear_train",)
     else:
         cfg.SEMISUPNET.set_new_allowed(True)
         cfg.merge_from_file(args.config_file)
@@ -64,6 +66,22 @@ def setup(args):
     if args.acdc_type is not None:
         cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_{}".format(args.acdc_type))
         cfg.DATASETS.TRAIN_UNLABEL = ("ACDC_train_{}".format(args.acdc_type),)
+    if args.acdc_type is not None and args.acdc_only:
+        cfg.DATASETS.TRAIN_LABEL = ("ACDC_train_{}".format(args.acdc_type),)
+    elif args.acdc_only:
+        cfg.DATASETS.TRAIN_LABEL = ("cityscapes_fine_instance_seg_train",)
+        cfg.DATASETS.TRAIN_UNLABEL = ("cityscapes_fine_instance_seg_train",)
+        cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_fog","ACDC_val_night","ACDC_val_rain","ACDC_val_snow")
+    elif args.bdd_only:
+        cfg.DATASETS.TRAIN_LABEL = ("BDD_day_train",)
+        cfg.DATASETS.TRAIN_UNLABEL = ("BDD_day_train",)
+        cfg.DATASETS.TEST = ("cityscapes_val","BDD_day_val")
+    elif args.use_city_dino:
+        cfg.DATASETS.TRAIN_LABEL = ("cityscapes_fine_instance_seg_train",)
+        cfg.DATASETS.TRAIN_UNLABEL = ("BDD_day_train",)
+        cfg.DATASETS.TEST = ("cityscapes_val","BDD_day_val")
+    if args.small_anchors:
+        cfg.MODEL.ANCHOR_GENERATOR.SIZES = [[8, 16, 32, 64, 128, 256, 512]]
     # cfg.DATASETS.TRAIN_UNLABEL = ("cityscapes_foggy_train")
     # cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_fog","ACDC_val_night","ACDC_val_rain","ACDC_val_snow")
     # cfg.DATASETS.TEST = ("cityscapes_val","cityscapes_foggy_val","ACDC_train_fog","ACDC_train_night","ACDC_train_rain","ACDC_train_snow")
@@ -188,12 +206,16 @@ def main(args):
 if __name__ == "__main__":
     parser = default_argument_parser()
     parser.add_argument("--acdc-type", default=None, help="acdc run type")
+    parser.add_argument("--acdc-only", default=False, help="train on acdc only")
+    parser.add_argument("--bdd-only", default=False, help="train on bdd only")
+    parser.add_argument("--use-city-dino", default=False, help="train city2bdd")
     parser.add_argument("--use-wandb", default=False, help="use wandb to log run")
+    parser.add_argument("--small-anchors", default=False, help="add smaller anchors for long range")
     args = parser.parse_args()
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
     args.dist_url = (':').join(url_parts)
-    args.use_wandb=False
+    args.use_wandb=True
 
     #   --num-gpus 8
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\
@@ -209,6 +231,8 @@ if __name__ == "__main__":
     # args.config_file = './configs/faster_rcnn_DINO_test.yaml'
     # args.config_file = './configs/faster_rcnn_2trunks.yaml'
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_test_small.yaml'
+    # args.config_file = './configs/faster_rcnn_DINO_bbone.yaml'
+    # args.config_file = './configs/faster_rcnn_DINO_test.yaml'
     # args.resume = False
     args.resume = True
 
@@ -226,7 +250,7 @@ if __name__ == "__main__":
     # args.output_dir = 'output/test_v2_align_contrast010_temp100/'
     # args.output_dir = 'output/test_v2_align_contrast010_gtprops/'
     # args.output_dir = 'output/test_v2_short_align010_centre_gtprops_mmd/'
-    # args.output_dir = 'output/dino/test_dino_nom_dino050_smask020_w010/'
+    # args.output_dir = 'backboneoutput/dino/test_dino_nom_dino050_smask020_w010/'
     # args.output_dir = 'output/dino/test_dino_rain_dino050_010/'
     # args.output_dir = 'output/dino/test_dino_rain_dino050_050/'
     # args.output_dir = 'output/dino/test_dino_nom_dino010/'
@@ -263,6 +287,9 @@ if __name__ == "__main__":
     # args.output_dir = '/media/marc/data_checks1/results_dino/vgg/dino_twin_vgg_cityfog_align5k_dinogt20k_half_easyweights_v1/'
     # args.output_dir = '/media/marc/data_checks1/results_dino/dino_head/dino_twin_resnet50_cityfog_sim5k_dinogt20k_v1/'
     # args.output_dir = '/media/marc/data_checks1/results_dino/cityfog/bl20k'
+    # args.output_dir = './output/dino/dino_twin_dinov2_nom_vitb_lrbbone001_rareclass_v1/'
+    # args.output_dir = './output/dino/dino_twin_dinovbbone_bddweather_vitl_v1/'
+    # args.output_dir = './output/dino/dino_twin_dinovbbone_vitlreg_v1/'
 
 
     # args.use_old_cfg = True

@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as T
 import numpy as np
-from dinov2.hub.backbones import dinov2_vits14, dinov2_vitb14, dinov2_vitl14, dinov2_vitg14
+from dinov2.hub.backbones import dinov2_vits14, dinov2_vitb14, dinov2_vitl14, dinov2_vitg14, dinov2_vitb14_reg, dinov2_vitl14_reg
 from PIL import Image
 from detectron2.structures.masks import polygons_to_bitmask, BitMasks, PolygonMasks
 import detectron2.utils.comm as comm
@@ -57,12 +57,16 @@ class DinoV2VitFeatureExtractor(nn.Module):
                 "dinov2_vitb14": (14, 768, dinov2_vitb14),
                 "dinov2_vitl14": (14, 1024, dinov2_vitl14),
                 "dinov2_vitg14": (14, 1536, dinov2_vitg14),
+                "dinov2_vitb14_reg4": (14, 768, dinov2_vitb14_reg),
+                "dinov2_vitl14_reg4": (14, 1024, dinov2_vitl14_reg),
             }
             # model name to model weights
             name_to_weights = {"dinov2_vits14": "dinov2_vits14_pretrain.pth",
                             "dinov2_vitb14": "dinov2_vitb14_pretrain.pth",
                             "dinov2_vitl14": "dinov2_vitl14_pretrain.pth",
-                            "dinov2_vitg14": "dinov2_vitg14_pretrain.pth"
+                            "dinov2_vitg14": "dinov2_vitg14_pretrain.pth",
+                            "dinov2_vitb14_reg4": "dinov2_vitb14_reg4_pretrain.pth",
+                            "dinov2_vitl14_reg4": "dinov2_vitl14_reg4_pretrain.pth",
             }
             # load model on cpu
             self.model_name = model_name

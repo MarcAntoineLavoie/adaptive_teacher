@@ -346,13 +346,15 @@ class ATeacherTrainer(DefaultTrainer):
         # create an student model
         model = self.build_model(cfg)
 
-        if cfg.SEMISUPNET.USE_DINO and not cfg.SEMISUPNET.DINO_BASE:
+        if cfg.SEMISUPNET.USE_DINO and cfg.SEMISUPNET.DINO_LOSS_WEIGHT>0.0:
             self.dino_layer = cfg.SEMISUPNET.DIS_TYPE
             self.branch = "supervised"
             self.use_dino = True
             self.cnn_feat = {}
             if "vgg" in cfg.MODEL.BACKBONE.NAME:
                 cnn_dim = [*model.backbone.modules()][-3].num_features
+            elif cfg.SEMISUPNET.DINO_MODEL=="dinov2_vits14":
+                cnn_dim = 384
             elif 'dino' in cfg.MODEL.BACKBONE.NAME or 'BiCephal' in cfg.MODEL.META_ARCHITECTURE:
                 cnn_dim = 768
             else:
@@ -1013,7 +1015,7 @@ class ATeacherTrainer(DefaultTrainer):
                 hold_labels = None
             if not self.use_gt_proposals:
                 unlabel_data_q = self.remove_label(unlabel_data_q)
-            unlabel_data_k = self.remove_label(unlabel_data_k)
+                unlabel_data_k = self.remove_label(unlabel_data_k)
 
 
                 # single_box = proposals_rpn_unsup_k[0].objectness_logits[0]
@@ -1053,7 +1055,9 @@ class ATeacherTrainer(DefaultTrainer):
                     if self.iter > self.PL_swap_iter and self.iter % 2:
                         swap_PL = True
 
-            if not self.use_dino_PL or swap_PL:
+            if self.use_gt_proposals:
+                record_dict.update({'iou_overlap':0})
+            elif not self.use_dino_PL or swap_PL:
                 #  1. generate the pseudo-label using teacher model
                 with torch.no_grad():
                     (
@@ -1108,9 +1112,9 @@ class ATeacherTrainer(DefaultTrainer):
                 unlabel_data_q = self.add_label(
                     unlabel_data_q, joint_proposal_dict["proposals_pseudo_roih"]
                 )
-            unlabel_data_k = self.add_label(
-                unlabel_data_k, joint_proposal_dict["proposals_pseudo_roih"]
-            )
+                unlabel_data_k = self.add_label(
+                    unlabel_data_k, joint_proposal_dict["proposals_pseudo_roih"]
+                )
 
             if self.cfg.INPUT.CLEAN_DETECTIONS:
                 unlabel_data_q, old_pseudo_boxes = self.clean_detections(unlabel_data_q, unlabel_regions, output_old=True)
@@ -1120,7 +1124,9 @@ class ATeacherTrainer(DefaultTrainer):
             #     a = 1
 
             all_label_data = label_data_q + label_data_k
-            if not self.use_dino_PL or swap_PL:
+            if self.use_gt_proposals:
+                all_unlabel_data = unlabel_data_q + unlabel_data_k
+            elif not self.use_dino_PL or swap_PL:
                 all_unlabel_data = unlabel_data_q
             else:
                 all_unlabel_data = unlabel_data_q + unlabel_data_k
@@ -1402,8 +1408,8 @@ class ATeacherTrainer(DefaultTrainer):
                 self.wandb_run.log(self._last_eval_results_teacher)
             return self._last_eval_results_teacher
 
-        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-                   test_and_save_results_student))
+        # ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
+        #            test_and_save_results_student))
         ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
                    test_and_save_results_teacher))
         # ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,

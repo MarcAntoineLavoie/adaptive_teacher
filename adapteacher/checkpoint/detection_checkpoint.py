@@ -63,6 +63,32 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
                     except ValueError:
                         pass
             return incompatible
+        
+        elif "cls_token" in checkpoint["model"].keys():
+            # pretrained vgg weights, update student model
+            model_state_dict = self.model.modelStudent.backbone.state_dict()
+            renamed_ckpt = align_and_update_state_dicts(
+                model_state_dict,
+                checkpoint["model"],
+                c2_conversion=checkpoint.get("__author__", None) == "Caffe2",
+            )
+            # checkpoint["model"] = model_state_dict
+            checkpoint["model"] = renamed_ckpt
+
+            # for non-caffe2 models, use standard ways to load it
+            incompatible = self._load_student_model(checkpoint, backbone_only=True)
+
+            model_buffers = dict(self.model.modelStudent.named_buffers(recurse=False))
+            for k in ["pixel_mean", "pixel_std"]:
+                # Ignore missing key message about pixel_mean/std.
+                # Though they may be missing in old checkpoints, they will be correctly
+                # initialized from config anyway.
+                if k in model_buffers:
+                    try:
+                        incompatible.missing_keys.remove(k)
+                    except ValueError:
+                        pass
+            return incompatible
 
         else:  # whole model
             if checkpoint.get("matching_heuristics", False):
@@ -90,7 +116,7 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
                         pass
             return incompatible
 
-    def _load_student_model(self, checkpoint: Any) -> _IncompatibleKeys:  # pyre-ignore
+    def _load_student_model(self, checkpoint: Any, backbone_only=False) -> _IncompatibleKeys:  # pyre-ignore
         checkpoint_state_dict = checkpoint.pop("model")
         self._convert_ndarray_to_tensor(checkpoint_state_dict)
 
@@ -100,7 +126,10 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
         _strip_prefix_if_present(checkpoint_state_dict, "module.")
 
         # work around https://github.com/pytorch/pytorch/issues/24139
-        model_state_dict = self.model.modelStudent.state_dict()
+        if backbone_only:
+            model_state_dict = self.model.modelStudent.backbone.state_dict()
+        else:
+            model_state_dict = self.model.modelStudent.state_dict()
         incorrect_shapes = []
         for k in list(checkpoint_state_dict.keys()):
             if k in model_state_dict:
@@ -109,10 +138,14 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
                 if shape_model != shape_checkpoint:
                     incorrect_shapes.append((k, shape_checkpoint, shape_model))
                     checkpoint_state_dict.pop(k)
-        # pyre-ignore
-        incompatible = self.model.modelStudent.load_state_dict(
-            checkpoint_state_dict, strict=False
-        )
+        # pyre-ignore        
+        if backbone_only:
+            incompatible = self.model.modelStudent.backbone.load_state_dict(checkpoint_state_dict, strict=False)
+        else:
+            incompatible = self.model.modelStudent.load_state_dict(checkpoint_state_dict, strict=False)
+        # incompatible = self.model.modelStudent.load_state_dict(
+        #     checkpoint_state_dict, strict=False
+        # )
         return _IncompatibleKeys(
             missing_keys=incompatible.missing_keys,
             unexpected_keys=incompatible.unexpected_keys,

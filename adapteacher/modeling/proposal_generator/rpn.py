@@ -85,7 +85,7 @@ class PseudoLabRPN(RPN):
         # The proposals are treated as fixed for joint training with roi heads.
         # This approach ignores the derivative w.r.t. the proposal boxes’ coordinates that
         # are also network responses.
-        if 0:
+        if 1:
             with torch.no_grad():
                 pred_proposals = self._decode_proposals(anchors, pred_anchor_deltas)
                 return find_top_rpn_proposals(

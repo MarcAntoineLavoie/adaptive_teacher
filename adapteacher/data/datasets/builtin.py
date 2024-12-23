@@ -236,9 +236,30 @@ def register_BDD(root):
             image_dir=image_dir, gt_dir=gt_file, evaluator_type="coco", **meta
         )
 
+
+_RAW_BDD_WEATHER_SPLITS = {
+    "BDD_dayclear_train": ("diverse_weather/Daytime_Sunny/JPEGImages/", "diverse_weather/Daytime_Sunny/labels/img_annos_train.pkl"),
+    "BDD_dayclear_val": ("diverse_weather/Daytime_Sunny/JPEGImages/", "diverse_weather/Daytime_Sunny/labels/img_annos_val.pkl"),
+    "BDD_nightclear_train": ("diverse_weather/Night-Sunny/JPEGImages/", "diverse_weather/Night-Sunny/labels/img_annos_train.pkl"),
+    "BDD_nightclear_val": ("diverse_weather/Night-Sunny/JPEGImages/", "diverse_weather/Night-Sunny/labels/img_annos_val.pkl"),
+    }
+
+def register_BDD_weather(root):
+    for key, (image_dir, gt_file) in _RAW_BDD_WEATHER_SPLITS.items():
+        meta = _get_builtin_metadata("cityscapes")
+        image_dir = os.path.join(root, image_dir)
+        gt_file = os.path.join(root, gt_file)
+
+        inst_key = key
+        DatasetCatalog.register(inst_key, lambda x=gt_file: load_BDD_instances(x),)
+        MetadataCatalog.get(inst_key).set(
+            image_dir=image_dir, gt_dir=gt_file, evaluator_type="coco", **meta
+        )
+
 register_all_cityscapes_foggy(_root)
 register_all_clipart(_root)
 register_all_water(_root)
 register_ACDC(_root)
 register_BDD(_root)
+register_BDD_weather(_root)
 
