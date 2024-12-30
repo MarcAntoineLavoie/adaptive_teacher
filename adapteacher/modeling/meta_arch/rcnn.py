@@ -1444,11 +1444,12 @@ class DinoV2VitFeatureExtractor_wrapper(DinoV2VitFeatureExtractor):
         return {self.output_layer: x_grid_features}
 
 class lazy_model_wrapper(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, freeze_bbone=False):
         super(lazy_model_wrapper, self).__init__()
         self.model = instantiate(cfg.model)
-        for param in self.model.backbone.net.parameters():
-            param.requires_grad = False
+        if freeze_bbone:
+            for param in self.model.backbone.net.parameters():
+                param.requires_grad = False
         self.model.to(torch.device('cuda'))
         self.device = self.model.device
         self.pixel_mean = torch.tensor(cfg.model.pixel_mean).to(device=self.device).reshape(3,1,1)

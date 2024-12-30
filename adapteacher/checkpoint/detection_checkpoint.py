@@ -69,7 +69,22 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
                     except ValueError:
                         pass
             return incompatible
-        
+
+        elif 'backbone.net.rope_win.freqs_cos' in checkpoint['model'].keys(): # eva02 full
+            incompatible = self._load_student_model(checkpoint, wrapped_model=True)
+
+            model_buffers = dict(self.model.modelStudent.model.named_buffers(recurse=False))
+            for k in ["pixel_mean", "pixel_std"]:
+                # Ignore missing key message about pixel_mean/std.
+                # Though they may be missing in old checkpoints, they will be correctly
+                # initialized from config anyway.
+                if k in model_buffers:
+                    try:
+                        incompatible.missing_keys.remove(k)
+                    except ValueError:
+                        pass
+            return incompatible
+
         elif "cls_token" in checkpoint["model"].keys():
             # pretrained vgg weights, update student model
             model_state_dict = self.model.modelStudent.backbone.state_dict()
@@ -143,7 +158,7 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
                         pass
             return incompatible
 
-    def _load_student_model(self, checkpoint: Any, backbone_only=False) -> _IncompatibleKeys:  # pyre-ignore
+    def _load_student_model(self, checkpoint: Any, backbone_only=False, wrapped_model=False) -> _IncompatibleKeys:  # pyre-ignore
         checkpoint_state_dict = checkpoint.pop("model")
         self._convert_ndarray_to_tensor(checkpoint_state_dict)
 
@@ -154,7 +169,9 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
 
         # work around https://github.com/pytorch/pytorch/issues/24139
         if backbone_only:
-            model_state_dict = self.model.modelStudent.backbone.state_dict()
+            model_state_dict = self.model.modelStudent.backbone.state_dict()        
+        if wrapped_model:
+            model_state_dict = self.model.modelStudent.model.state_dict()
         else:
             model_state_dict = self.model.modelStudent.state_dict()
         incorrect_shapes = []
@@ -168,6 +185,8 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
         # pyre-ignore        
         if backbone_only:
             incompatible = self.model.modelStudent.backbone.load_state_dict(checkpoint_state_dict, strict=False)
+        if wrapped_model:
+            incompatible = self.model.modelStudent.model.load_state_dict(checkpoint_state_dict, strict=False)
         else:
             incompatible = self.model.modelStudent.load_state_dict(checkpoint_state_dict, strict=False)
         # incompatible = self.model.modelStudent.load_state_dict(

@@ -305,41 +305,40 @@ def do_train(args, cfg, cfg_base):
     """
     Trainer = ATeacherTrainer
     
-    # split_name = cfg.OUTPUT_DIR.rsplit('/',1)
-    # name = split_name[-1]
-    # run_dir = split_name[0]
+    split_name = cfg_base.OUTPUT_DIR.rsplit('/',1)
+    name = split_name[-1]
+    run_dir = split_name[0]
     # # name = "config_test"
-    # conf_file='/'.join((cfg.OUTPUT_DIR,'config.yaml'))
-    # with open(conf_file) as yaml_in:
-    #     config_dict = yaml.safe_load(yaml_in)
-    #     if conf_file is None:
-    #         flat_dict = {}
-    #     else:
-    #         flat_dict = flatten_dict(config_dict)
-    # run_id_file = '/'.join((cfg.OUTPUT_DIR,'run_id.txt'))
-    # if os.path.isfile(run_id_file):
-    #     with open(run_id_file, "r") as text_file:
-    #         run_id = text_file.read().rstrip()
-    # else:
-    #     run_id = os.urandom(4).hex()
-    #     with open(run_id_file, "w") as text_file:
-    #         print(run_id, file=text_file)
-    # if args.use_wandb:
-    #     run = wandb.init(
-    #         # set the wandb project where this run will be logged
-    #         project="test_dino",
-    #         name=name,
-    #         dir=run_dir,
-    #         # id=run_id,
-    #         # resume="allow",
-    #         # track hyperparameters and run metadata
-    #         config=flat_dict
-    #     )
-    # else:
-    #     run = None
+    conf_file='/'.join((cfg_base.OUTPUT_DIR,'config.yaml'))
+    with open(conf_file) as yaml_in:
+        config_dict = yaml.safe_load(yaml_in)
+        if conf_file is None:
+            flat_dict = {}
+        else:
+            flat_dict = flatten_dict(config_dict)
+    run_id_file = '/'.join((cfg_base.OUTPUT_DIR,'run_id.txt'))
+    if os.path.isfile(run_id_file):
+        with open(run_id_file, "r") as text_file:
+            run_id = text_file.read().rstrip()
+    else:
+        run_id = os.urandom(4).hex()
+        with open(run_id_file, "w") as text_file:
+            print(run_id, file=text_file)
+    if args.use_wandb:
+        run = wandb.init(
+            # set the wandb project where this run will be logged
+            project="test_dino",
+            name=name,
+            dir=run_dir,
+            # id=run_id,
+            # resume="allow",
+            # track hyperparameters and run metadata
+            config=flat_dict
+        )
+    else:
+        run = None
 
-    run = None
-    trainer = Trainer(cfg_base, cfg_lazy=cfg, wandb_run=run)
+    trainer = Trainer(cfg_base, cfg_lazy=cfg, wandb_run=run, freeze_bbone=args.freeze_bbone)
     trainer.resume_or_load(resume=args.resume)
     out = trainer.train()
 
@@ -455,11 +454,14 @@ def main(args):
 
 
 if __name__ == "__main__":
-    args = default_argument_parser().parse_args()
+    parser = default_argument_parser()
+    parser.add_argument("--freeze-bbone", default=True, help="freeze vit backbone")
+    args = parser.parse_args()
     # args.config_file = '/home/marc/Documents/trailab_work/uda_detect/detrex/projects/dino/configs/dino-resnet/dino_r50_4scale_12ep.py'
     args.config_file_bbone = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/dino_eva/configs/dino-eva-02/new_dino_eva_02_vitdet_b_4attn_1024_lrd0p7_4scale_12ep.py'
     args.config_file = './configs/eva_nom.yaml'
     # args.opts = ['train.init_checkpoint=/media/marc/data_checks1/eva02_B_pt_in21k_p14to16.pt']
+    args.use_wandb = False
     launch(
         main,
         args.num_gpus,

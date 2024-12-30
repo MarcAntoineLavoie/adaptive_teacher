@@ -333,7 +333,7 @@ class BaselineTrainer(DefaultTrainer):
 
 # Adaptive Teacher Trainer
 class ATeacherTrainer(DefaultTrainer):
-    def __init__(self, cfg, wandb_run=None, cfg_lazy=None):
+    def __init__(self, cfg, wandb_run=None, cfg_lazy=None, freeze_bbone=False):
         """
         Args:
             cfg (CfgNode):
@@ -345,7 +345,7 @@ class ATeacherTrainer(DefaultTrainer):
 
         # create an student model
         if cfg_lazy:
-            model = self.build_lazy_model(cfg_lazy)
+            model = self.build_lazy_model(cfg_lazy, freeze_bbone=freeze_bbone)
         else:
             model = self.build_model(cfg)
 
@@ -531,7 +531,7 @@ class ATeacherTrainer(DefaultTrainer):
         # self.gradient = []
 
     @staticmethod
-    def build_lazy_model(cfg):
+    def build_lazy_model(cfg, freeze_bbone=False):
         """
         Returns:
             torch.nn.Module:
@@ -540,7 +540,7 @@ class ATeacherTrainer(DefaultTrainer):
         Overwrite it if you'd like a different model.
         """
         from adapteacher.modeling.meta_arch.rcnn import lazy_model_wrapper
-        model = lazy_model_wrapper(cfg)
+        model = lazy_model_wrapper(cfg, freeze_bbone=freeze_bbone)
         logger = logging.getLogger(__name__)
         logger.info("Model:\n{}".format(model))
         return model
