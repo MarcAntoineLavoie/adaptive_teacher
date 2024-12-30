@@ -4,3 +4,4 @@ output/*
 datasets/*
 wandb/*
 plots/*
+dino_eva/checkpoints/*

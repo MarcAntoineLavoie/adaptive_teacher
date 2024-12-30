@@ -2,8 +2,15 @@ _BASE_: "./Base-RCNN-C4.yaml"
 # OUTPUT_DIR: "output/at_scaled"
 OUTPUT_DIR: "output/test4"
 INPUT:
-  CLEAN_DETECTIONS: True
+  CLEAN_DETECTIONS: False
   MAX_OCCLUSION: 0.5
+  CROP:
+    ENABLED: True
+    # ENABLED: False
+  MIN_SIZE_TRAIN: (550,)
+  USE_RANDOM_NOISE: False
+  DINO_PATCH_SIZE: 14
+  PAD_CROP: True
 MODEL:
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
   META_ARCHITECTURE: "DAobjTwoStagePseudoLabGeneralizedRCNN"
@@ -33,6 +40,25 @@ MODEL:
     NAME: "FastRCNNConvFCHead"
     NUM_FC: 2
     POOLER_RESOLUTION: 7
+  PROBABILISTIC_MODELING:
+  # One of the following Loss types: 'none' or 'negative_log_likelihood', 'second_moment_matching', 'energy_loss'.
+    BBOX_COV_LOSS:
+        NAME: 'energy_loss'
+        # NAME: 'negative_log_likelihood'
+        COVARIANCE_TYPE: 'diagonal' # One of the following: 'full', 'diagonal'
+        NUM_SAMPLES: 1000
+        # NAME: 'energy_loss2'
+        # # NAME: 'negative_log_likelihood'
+        # COVARIANCE_TYPE: 'diagonal' # One of the following: 'full', 'diagonal'
+        # NUM_SAMPLES: 50
+    ANNEALING_STEP: 10000
+    PROB_IOU: False
+    SELECT_IOU: False
+    SELECT_IOU2: False
+    SCALE_LOSS: False
+    SCALE_EXPO_SCORE: 1.0
+    SCALE_EXPO_IOU: 1.0
+    GT_INJECT_COV_WEIGHT: 1.0
 SOLVER:
   LR_SCHEDULER_NAME: "WarmupTwoStageMultiStepLR"
   STEPS: (60000, 80000, 90000, 360000)
@@ -41,27 +67,55 @@ SOLVER:
   MAX_ITER: 10
   # IMG_PER_BATCH_LABEL: 16
   # IMG_PER_BATCH_UNLABEL: 16
-  IMG_PER_BATCH_LABEL: 3
-  IMG_PER_BATCH_UNLABEL: 3
+  IMG_PER_BATCH_LABEL: 4
+  IMG_PER_BATCH_UNLABEL: 4
   BASE_LR: 0.04
 DATALOADER:
   SUP_PERCENT: 100.0
 DATASETS:
-DATASETS:
   CROSS_DATASET: True
   TRAIN_LABEL: ("cityscapes_fine_instance_seg_train",)
-  TRAIN_UNLABEL: ("cityscapes_foggy_train",)
-  TEST: ("cityscapes_foggy_val",)
+  # TRAIN_UNLABEL: ("ACDC_train_night",)
+  # TEST: ("cityscapes_val","ACDC_val_night")
+  TRAIN_UNLABEL: ("BDD_day_train",)
+  TEST: ("cityscapes_val","BDD_day_val")
 SEMISUPNET:
   Trainer: "ateacher"
   BBOX_THRESHOLD: 0.8
   TEACHER_UPDATE_ITER: 1
-  BURN_UP_STEP: 20000
-  # BURN_UP_STEP: 10
+  # BURN_UP_STEP: 20000
+  BURN_UP_STEP: 2
   EMA_KEEP_RATE: 0.9996
   UNSUP_LOSS_WEIGHT: 1.0
   SUP_LOSS_WEIGHT: 1.0
   DIS_TYPE: "vgg4" #["concate","p2","multi"]
+  DIS_LOSS_WEIGHT: 0.0
+  DOMAIN_ADV_INST: 0.0
+  ALIGN_PROPOSALS: False
+  USE_GT_PROPOSALS: False
+  BOX_NORM_CLASS: False
+  EVAL_PSEUDO_LABELS: False
+  USE_DINO: True
+  DINO_LOSS_WEIGHT: 1.0
+  DINO_LOSS_WEIGHT_TARGET: 1.0
+  DINO_SOURCE_BG_WEIGHT: 1.0
+  DINO_SOURCE_FG_THRESH: 0.2
+  DINO_LOSS_NORM: True
+  DINO_HEAD: 'MLP'
+  DINO_MODEL: "dinov2_vitb14_reg4"
+  DINO_INSTANCE_MASK: False
+  DINO_TARGET_MASK: False
+  DINO_ALIGN_LOSS: "contrast"
+  DINO_CONT_QUEUE_LENGTH: 4096
+  DINO_CONT_TEMP: 0.1
+  DINO_CONT_IGNORE_CLOSEST: 0
+  FREEZE_POSTPRETRAIN: False
+  PRETRAIN_STEPS: 0
+  DINO_PROJ_GELU: False
+  # DINO_TARGET_PSEUDOGT: /raid/datasets/acdc/gt_detection_trainval/gt_detection/night/train/dino_anno.pkl
+  # DINO_TARGET_PSEUDOGT: /raid/datasets/BDD/bdd100k/labels/train/day/BDD_day_train_dino_anno.pkl
+  DINO_TARGET_PSEUDOGT: None
+  DINO_SAM_MASK: True
 TEST:
   # EVAL_PERIOD: 1000
   EVAL_PERIOD: 10

@@ -337,7 +337,7 @@ def do_train(args, cfg, cfg_base):
         )
     else:
         run = None
-
+        
     trainer = Trainer(cfg_base, cfg_lazy=cfg, wandb_run=run, freeze_bbone=args.freeze_bbone)
     trainer.resume_or_load(resume=args.resume)
     out = trainer.train()
@@ -423,13 +423,14 @@ def do_train(args, cfg, cfg_base):
 
 
 def main(args):
-    cfg = LazyConfig.load(args.config_file_bbone)
-    cfg = LazyConfig.apply_overrides(cfg, args.opts)
-    default_setup(cfg, args)
+    cfg = LazyConfig.load(args.bbone_cfg)
+    # cfg = LazyConfig.apply_overrides(cfg, args.opts)
+    # default_setup(cfg, args)
     cfg_base = get_cfg()
     cfg_base.set_new_allowed(True)
     add_ateacher_config(cfg_base)
-    cfg_base.merge_from_file(args.config_file)
+    cfg_base.merge_from_file(args.run_cfg)
+    default_setup(cfg_base, args)
 
     # Enable fast debugging by running several iterations to check for any bugs.
     if cfg.train.fast_dev_run.enabled:
@@ -452,16 +453,23 @@ def main(args):
     else:
         do_train(args, cfg, cfg_base)
 
-
+from random import randint
 if __name__ == "__main__":
     parser = default_argument_parser()
-    parser.add_argument("--freeze-bbone", default=True, help="freeze vit backbone")
+    parser.add_argument("--freeze-bbone", default=False, help="freeze vit backbone")
+    parser.add_argument("--run-cfg", default='./configs/eva_nom.yaml', help="default config")
+    parser.add_argument("--bbone-cfg", default='/home/mlavoie/scripts/adaptive_teacher/dino_eva/configs/dino-eva-02/new_dino_eva_02_vitdet_b_4attn_1024_lrd0p7_4scale_12ep.py', help="default config bbone")
+    parser.add_argument("--use-wandb", default=True, help="use wandb to log run")
     args = parser.parse_args()
     # args.config_file = '/home/marc/Documents/trailab_work/uda_detect/detrex/projects/dino/configs/dino-resnet/dino_r50_4scale_12ep.py'
-    args.config_file_bbone = '/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/dino_eva/configs/dino-eva-02/new_dino_eva_02_vitdet_b_4attn_1024_lrd0p7_4scale_12ep.py'
-    args.config_file = './configs/eva_nom.yaml'
-    # args.opts = ['train.init_checkpoint=/media/marc/data_checks1/eva02_B_pt_in21k_p14to16.pt']
-    args.use_wandb = False
+    # args.bbone_cfg = '/home/mlavoie/scripts/adaptive_teacher/dino_eva/configs/dino-eva-02/new_dino_eva_02_vitdet_b_4attn_1024_lrd0p7_4scale_12ep.py'
+    # args.run_cfg = './configs/eva_nom.yaml'
+    # args.freeze_bbone = False
+    # args.num_gpus = 2
+    # args.use_wandb = False
+    url_parts = args.dist_url.rsplit(':',1)
+    url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
+    args.dist_url = (':').join(url_parts)
     launch(
         main,
         args.num_gpus,

@@ -16,7 +16,7 @@ INPUT:
   CROP:
     ENABLED: True
     # ENABLED: False
-  MIN_SIZE_TRAIN: (550,)
+  MIN_SIZE_TRAIN: (600,)
   USE_RANDOM_NOISE: False
   DINO_PATCH_SIZE: 14
   PAD_CROP: True
@@ -81,18 +81,22 @@ DATALOADER:
 DATASETS:
   CROSS_DATASET: True
   TRAIN_LABEL: ("cityscapes_fine_instance_seg_train",)
+  TRAIN_UNLABEL: ("cityscapes_fine_instance_seg_train",)
   # TRAIN_UNLABEL: ("cityscapes_foggy_train",)
   # TEST: ("cityscapes_foggy_val",)
-  TRAIN_UNLABEL: ("ACDC_train_rain",)
+  # TRAIN_UNLABEL: ("ACDC_train_rain",)
   # TEST: ("ACDC_val_fog",)
-  TEST: ("cityscapes_val","ACDC_val_rain")
-  # TEST: ("cityscapes_val",)
+  # TEST: ("cityscapes_val","ACDC_val_night","BDD_day_val")
+  TEST: ("cityscapes_val","BDD_day_val")
+  # TRAIN_LABEL: ("BDD_dayclear_train",)
+  # TRAIN_UNLABEL: ("BDD_dayclear_train",)
+  # TEST: ("BDD_nightclear_val",)
 SEMISUPNET:
   Trainer: "ateacher"
   BBOX_THRESHOLD: 0.8
   # BBOX_THRESHOLD: 0.15
   TEACHER_UPDATE_ITER: 1
-  BURN_UP_STEP: 20000
+  BURN_UP_STEP: 100000
   # BURN_UP_STEP: 5
   EMA_KEEP_RATE: 0.9996
   # EMA_KEEP_RATE: 0.999
@@ -132,24 +136,25 @@ SEMISUPNET:
   SUPPRESS_BBOX_CORR: 1.0
   PSEUDO_THRESH_BOTH: False
   PSEUDO_OBJ_THRESH: 1.0
-  USE_DINO: True
-  DINO_LOSS_WEIGHT: 0.5
+  USE_DINO: False
+  DINO_LOSS_WEIGHT: 0.0
   DINO_LOSS_WEIGHT_TARGET: 0.0
   DINO_SOURCE_BG_WEIGHT: 0.5
   DINO_SOURCE_FG_THRESH: 0.2
   DINO_LOSS_NORM: True
-  DINO_HEAD: 'MLP3'
-  DINO_MODEL: "dinov2_vitb14"
+  DINO_HEAD: 'MLP'
+  DINO_MODEL: "dinov2_vitl14"
   # DINO_MODEL: "dino_vitb16"
   DINO_INSTANCE_MASK: True
   DINO_ALIGN_LOSS: "contrast"
   DINO_CONT_QUEUE_LENGTH: 512
   DINO_CONT_TEMP: 0.1
-  DINO_CONT_IGNORE_CLOSEST: 2
+  DINO_CONT_IGNORE_CLOSEST: 0
   DINO_BASE: True
-  PRETRAIN_STEPS: 2
+  PRETRAIN_STEPS: 0
+  DINO_LR_SCALE: 0.0
 TEST:
-  EVAL_PERIOD: 1000
+  EVAL_PERIOD: 2500
   # EVAL_PERIOD: 10
 
 

@@ -1,8 +1,14 @@
 _BASE_: "./Base-RCNN-C4.yaml"
 OUTPUT_DIR: "output/at_scaled"
 INPUT:
-  CLEAN_DETECTIONS: False
   MAX_OCCLUSION: 0.5
+  CROP:
+    ENABLED: True
+    # ENABLED: False
+  MIN_SIZE_TRAIN: (550,)
+  USE_RANDOM_NOISE: False
+  DINO_PATCH_SIZE: 14
+  PAD_CROP: True
 MODEL:
   # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
   META_ARCHITECTURE: "DAobjTwoStagePseudoLabGeneralizedRCNN"

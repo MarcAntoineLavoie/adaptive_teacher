@@ -27,8 +27,8 @@ model.backbone.net.drop_path_rate = 0.1
 model.backbone.net.window_block_indexes = [0, 1, 3, 4, 6, 7, 9, 10]
 
 # modify training config
-train.init_checkpoint = "/home/marc/Documents/trailab_work/uda_detect/adaptive_teacher/dino_eva/checkpoints/eva02_B_pt_in21k_p14to16.pt"
-train.output_dir = "./output/dino_eva_02_vitdet_b_4attn_1024_lrd0p7_4scale_12ep"
+train.init_checkpoint = "/home/mlavoie/scripts/adaptive_teacher/dino_eva/checkpoints/eva02_B_pt_in21k_p14to16.pt"
+train.output_dir = "./output/test/test_eva02"
 
 # max training iterations
 train.max_iter = 90000
@@ -57,5 +57,5 @@ dataloader.train.num_workers = 2
 # please notice that this is total batch size.
 # surpose you're using 4 gpus for training and the batch size for
 # each gpu is 16/4 = 4
-dataloader.train.total_batch_size = 2
+dataloader.train.total_batch_size = 8
 
