@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
+# import json
+# file_in1 = '/media/marc/data_checks1/bdd/labels/bdd100k_det_20_labels_trainval/bdd100k/labels/det_20/det_val.json'
+# file_in2 = '/media/marc/data_checks1/bdd/labels/bdd100k_det_20_labels_trainval/bdd100k/labels/det_20/det_val_coco.json'
+# file_in1 = '/media/marc/data_checks1/bdd/labels/bdd100k_ins_seg_labels_trainval/bdd100k/labels/ins_seg/rles/ins_seg_val_coco.json'
+# file_in2 = '/media/marc/data_checks1/bdd/labels/bdd100k_ins_seg_labels_trainval/bdd100k/labels/ins_seg/rles/ins_seg_train_coco.json'
+
+# with open(file_in1, 'rb') as fin1:
+#     data1 = json.load(fin1)
+# with open(file_in2, 'rb') as fin2:
+#     data2 = json.load(fin2)
+# a=1
+
 import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
@@ -90,9 +102,14 @@ def setup(args):
     # cfg.DATASETS.TEST = ("cityscapes_foggy_val002",)
     # cfg.DATASETS.TEST = ("cityscapes_foggy_val",)
     # cfg.DATASETS.TEST = ("BDD_day_val",)
-    # cfg.DATASETS.TEST = ("BDD_day_train",)
+    # cfg.DATASETS.TEST = ("cityscapes_val","BDD_seg_val",)
+    # cfg.DATASETS.TEST = ("cityscapes_val","BDD_seg_train",)
+    # cfg.DATASETS.TEST = ("BDD_seg_val","cityscapes_val",)
     # cfg.DATASETS.TEST = ("cityscapes_foggy_train",)
-    # cfg.INPUT.MIN_SIZE_TRAIN = (800,)
+    # cfg.DATASETS.TEST = ("cityscapes_val","BDD_day_val")
+    # cfg.DATASETS.TEST = ("ACDC_val_snow",)
+    # cfg.INPUT.MIN_SIZE_TEST = (800,)
+    # cfg.INPUT.MAX_SIZE_TEST = (1600,)
     # cfg.SEMISUPNET.USE_DINO = False
     # cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT = None
     if cfg.SEMISUPNET.DINO_BASE:
@@ -100,7 +117,7 @@ def setup(args):
         if cfg.INPUT.MAX_SIZE_TEST % scale:
             cfg.INPUT.MAX_SIZE_TEST =  floor(cfg.INPUT.MAX_SIZE_TEST / scale)*scale
     cfg.freeze()
-    default_setup(cfg, args)
+    default_setup(cfg, args, save_config=False)
     return cfg
 
 def scale_configs(cfg):
@@ -215,7 +232,7 @@ if __name__ == "__main__":
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
     args.dist_url = (':').join(url_parts)
-    args.use_wandb=True
+    args.use_wandb=False
 
     #   --num-gpus 8
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\
@@ -233,8 +250,9 @@ if __name__ == "__main__":
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_test_small.yaml'
     # args.config_file = './configs/faster_rcnn_DINO_bbone.yaml'
     # args.config_file = './configs/faster_rcnn_DINO_test.yaml'
-    # args.resume = False
-    args.resume = True
+    args.config_file = './configs/faster_rcnn_RES_panoptic.yaml'
+    args.resume = False
+    # args.resume = True
 
     # args.OUTPUT_DIR = './output/temp1'
 

@@ -381,6 +381,185 @@ class prob_COCOeval(COCOeval):
         print('DONE (t={:0.2f}s).'.format( toc-tic))
 
 
+class size_COCOeval(COCOeval):
+    def evaluate(self):
+        '''
+        Run per image evaluation on given images and store results (a list of dict) in self.evalImgs
+        :return: None
+        '''
+        tic = time.time()
+        print('Running per image evaluation...')
+        p = self.params
+        # add backward compatibility if useSegm is specified in params
+        if not p.useSegm is None:
+            p.iouType = 'segm' if p.useSegm == 1 else 'bbox'
+            print('useSegm (deprecated) is not None. Running {} evaluation'.format(p.iouType))
+        print('Evaluate annotation type *{}*'.format(p.iouType))
+        p.imgIds = list(np.unique(p.imgIds))
+        if p.useCats:
+            p.catIds = list(np.unique(p.catIds))
+        p.maxDets = sorted(p.maxDets)
+        self.params=p
+
+        self.bbox_dif = Box2BoxTransform((10.0, 10.0, 5.0, 5.0))
+
+        self._prepare()
+        # loop through images, area range, max detection number
+        catIds = p.catIds if p.useCats else [-1]
+
+        if p.iouType == 'segm' or p.iouType == 'bbox':
+            computeIoU = self.computeIoU
+        elif p.iouType == 'keypoints':
+            computeIoU = self.computeOks
+        self.ious = {(imgId, catId): computeIoU(imgId, catId) \
+                        for imgId in p.imgIds
+                        for catId in catIds}
+
+        evaluateImg = self.evaluateImg
+        maxDet = p.maxDets[-1]
+        self.evalImgs = [evaluateImg(imgId, catId, areaRng, maxDet)
+                 for catId in catIds
+                 for areaRng in p.areaRng
+                 for imgId in p.imgIds
+             ]
+        self._paramsEval = copy.deepcopy(self.params)
+        toc = time.time()
+        print('DONE (t={:0.2f}s).'.format(toc-tic))
+
+    def evaluateImg(self, imgId, catId, aRng, maxDet):
+        '''
+        perform evaluation for single category and image
+        :return: dict (single image results)
+        '''
+        p = self.params
+        if p.useCats:
+            gt = self._gts[imgId,catId]
+            dt = self._dts[imgId,catId]
+        else:
+            gt = [_ for cId in p.catIds for _ in self._gts[imgId,cId]]
+            dt = [_ for cId in p.catIds for _ in self._dts[imgId,cId]]
+        if len(gt) == 0 and len(dt) ==0:
+            return None
+
+        for g in gt:
+            if g['ignore'] or (g['area']<aRng[0] or g['area']>aRng[1]):
+                g['_ignore'] = 1
+            else:
+                g['_ignore'] = 0
+
+        # sort dt highest score first, sort gt ignore last
+        gtind = np.argsort([g['_ignore'] for g in gt], kind='mergesort')
+        gt = [gt[i] for i in gtind]
+        dtind = np.argsort([-d['score'] for d in dt], kind='mergesort')
+        dt = [dt[i] for i in dtind[0:maxDet]]
+        iscrowd = [int(o['iscrowd']) for o in gt]
+        # load computed ious
+        ious = self.ious[imgId, catId][:, gtind] if len(self.ious[imgId, catId]) > 0 else self.ious[imgId, catId]
+
+        T = len(p.iouThrs)
+        G = len(gt)
+        D = len(dt)
+        gtm  = np.zeros((T,G))
+        dtm  = np.zeros((T,D))
+        gtIg = np.array([g['_ignore'] for g in gt])
+        dtIg = np.zeros((T,D))
+        if not len(ious)==0:
+            for tind, t in enumerate(p.iouThrs):
+                for dind, d in enumerate(dt):
+                    # information about best match so far (m=-1 -> unmatched)
+                    iou = min([t,1-1e-10])
+                    m   = -1
+                    for gind, g in enumerate(gt):
+                        # if this gt already matched, and not a crowd, continue
+                        if gtm[tind,gind]>0 and not iscrowd[gind]:
+                            continue
+                        # if dt matched to reg gt, and on ignore gt, stop
+                        if m>-1 and gtIg[m]==0 and gtIg[gind]==1:
+                            break
+                        # continue to next gt unless better match made
+                        if ious[dind,gind] < iou:
+                            continue
+                        # if match successful and best so far, store appropriately
+                        iou=ious[dind,gind]
+                        m=gind
+                    # if match made store id of match for both dt and gt
+                    if m ==-1:
+                        continue
+                    dtIg[tind,dind] = gtIg[m]
+                    dtm[tind,dind]  = gt[m]['id']
+                    gtm[tind,m]     = d['id']
+        # set unmatched detections outside of area range to ignore
+        a = np.array([d['area']<aRng[0] or d['area']>aRng[1] for d in dt]).reshape((1, len(dt)))
+        dtIg = np.logical_or(dtIg, np.logical_and(dtm==0, np.repeat(a,T,0)))
+
+        areas = np.array([[int(gtm[0,x]>0),gt[x]['area']] for x in range(len(gt))])
+
+        # store results for given image and category
+        return {
+                'image_id':     imgId,
+                'category_id':  catId,
+                'aRng':         aRng,
+                'maxDet':       maxDet,
+                'dtIds':        [d['id'] for d in dt],
+                'gtIds':        [g['id'] for g in gt],
+                'dtMatches':    dtm,
+                'gtMatches':    gtm,
+                'dtScores':     [d['score'] for d in dt],
+                'gtIgnore':     gtIg,
+                'dtIgnore':     dtIg,
+                'areas':        areas,
+            }
+def test_sizes():
+    import matplotlib.pyplot as plt
+    test = np.zeros((8,100,2))
+    areas = [[[],[],[]] for x in range(8)]
+    for id,img in enumerate(self.evalImgs):
+        # print(id)
+        if img is None:
+            continue
+        if img['aRng'] == p.areaRng[0]:
+            if img['areas'].any():
+                cls_id = img['category_id']
+                n_inst = img['areas'].shape[0]
+                test[cls_id,n_inst,:] += np.array([n_inst, sum(img['areas'][:,0])])
+                pos = list(img['areas'][(img['areas'][:,0] == 1),1]**0.5)
+                neg = list(img['areas'][(img['areas'][:,0] == 0),1]**0.5)
+                areas[cls_id][0] += pos
+                areas[cls_id][1] += neg
+                areas[cls_id][2] += list(img['areas'][:,1]**0.5)
+            else:
+                print('no value id:{}'.format(id))
+
+    i = 8
+    n = float(len(areas[i][2]))
+    bins = np.arange(0,605,5)
+    hist_all, _ = np.histogram(areas[i][2],bins=bins)
+    hist_true, _ = np.histogram(areas[i][0],bins=bins)
+    hist_all = hist_all.astype(float)
+    hist_true = hist_true.astype(float)
+    ratios = (1 - (hist_all - hist_true) / (hist_all + 1e-12))*100
+    sum_ratio = (1-np.cumsum(hist_true) / np.cumsum(hist_all+1e-12))*100
+    sum_wrong = ((np.cumsum(hist_all) - np.cumsum(hist_true)) / np.sum(hist_all-hist_true+1e-12))*100
+
+    fig,ax1 = plt.subplots()
+    ax1.stairs(hist_all,bins,fill=True,label='GT')
+    ax1.stairs(hist_true,bins,fill=True,label='TP @50')
+    ax1.stairs(hist_all - hist_true,bins,fill=True,label='Miss @50')
+    ax1.set_xlabel('sqrt(Area)')
+    ax1.set_ylabel('Count')
+    ax2 = ax1.twinx()
+    ax2.plot((bins[1:]+bins[:-1])/2,np.cumsum(hist_all)/np.sum(hist_all+1e-12)*100,color='tab:red',label='% All Data',linewidth=2)
+    ax2.plot((bins[1:]+bins[:-1])/2,sum_ratio,color='tab:purple',label='% Err Rate',linewidth=2)
+    ax2.plot((bins[1:]+bins[:-1])/2,sum_wrong,color='tab:pink',label='% All Err',linewidth=2)
+    ax2.tick_params(axis='y')
+    ax2.set_ylim(0,105)
+    ax2.set_ylabel('% Correct')
+    ax1.legend()
+    ax2.legend()
+    plt.tight_layout()
+    plt.show()
+
+
 # for id 
 
 # import matplotlib.pyplot as plt

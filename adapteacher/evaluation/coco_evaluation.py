@@ -27,7 +27,7 @@ from detectron2.utils.logger import create_small_table
 from detectron2.evaluation import DatasetEvaluator
 from iopath.common.file_io import file_lock
 
-from .prob_cocoeval import prob_COCOeval
+from .prob_cocoeval import prob_COCOeval, size_COCOeval
 
 logger = logging.getLogger(__name__)
 
@@ -655,7 +655,9 @@ def _evaluate_predictions_on_coco(
     # use_fast_impl = False
 
     coco_dt = coco_gt.loadRes(coco_results)
-    if use_prob:
+    if 1:
+        coco_eval = size_COCOeval(coco_gt, coco_dt, iou_type)
+    elif use_prob:
         coco_eval = prob_COCOeval(coco_gt, coco_dt, iou_type)
     else:
         coco_eval = (COCOeval_opt if use_fast_impl else COCOeval)(coco_gt, coco_dt, iou_type)

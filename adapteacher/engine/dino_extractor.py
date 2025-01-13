@@ -91,6 +91,13 @@ class DinoV2VitFeatureExtractor(nn.Module):
             self.embed_dim = self.encoder.embed_dim
             self.patch_size = patch_size
 
+            self.k_feat = None
+            def hook_fn_forward_qkv(module, input, output):
+                B,N,C = output.shape
+                C2 = C//3
+                self.k_feat = output.reshape(B,N,3,C2)[:,1:,1,:]
+            self.encoder._modules["blocks"][-1]._modules["attn"]._modules["qkv"].register_forward_hook(hook_fn_forward_qkv)
+
 
     def forward(self, x):
         x = torch.stack([img['image'] for img in x], dim=0)[:,[2,1,0],:,:].float()

@@ -6,6 +6,8 @@ from adapteacher.data.transforms.augmentation_impl import (
 )
 from torch import rand
 import torchvision.transforms.functional as F
+import cv2
+import numpy as np
 
 def build_strong_augmentation(cfg, is_train):
     """
@@ -131,3 +133,57 @@ class RandomErasing_detect(transforms.RandomErasing):
             # return F.erase(img, x, y, h, w, v, self.inplace), [x,y,h,w]
             return F.erase(img, x, y, h, w, v, self.inplace), [y,x,w,h]
         return img, []
+
+######
+#Taken from https://github.com/K2OKOH/MAD
+######
+
+def ImageDCT(img):
+    h,w,c = img.shape
+    img_dct = np.zeros((h,w,c))
+    for i in range(c):
+        single_channel = img[:, :, i].astype(float)
+        # img_ = np.float32(img_)
+        img_dct[:,:,i] = cv2.dct(single_channel)
+    return img_dct
+
+def ImageIDCT(img_dct):
+    h,w,c = img_dct.shape
+    img = np.zeros((h,w,c))
+    for i in range(c):
+        single_channel = img_dct[:, :, i].astype(float)
+        # img_ = np.float32(img_)
+        img[:,:,i] = cv2.idct(single_channel).clip(0,1)
+    return img
+
+def FrequencyBandpassFilter(img,r1=0.005,r2=0.7,pass_val=0.99,low_floor=0.5,high_floor=0.2,noise_scale=0.1):
+    '''
+    img: hxwxc np.array image input
+    r1: float for low freq cutoff
+    r2: float for high freq cutoff
+    '''
+
+    h,w,c = img.shape
+    img_dct = ImageDCT(img)
+    mask = np.ones_like(img_dct)*pass_val
+    band_low = int(min(h,w) * r1)
+    band_high = int(min(h,w) * r2)
+    out_of_square = min(h,w)
+    
+    for x in range(h):
+        for y in range(w):
+            if (max(x, y) <= band_low):
+                mask[x,y,:] = (1-low_floor)*(band_low - max(x,y))/band_low + low_floor
+            elif (band_high <= max(x,y) <= out_of_square):
+                mask[x,y,:] = (max(x,y) - band_high)/(out_of_square-band_high)*(1-high_floor) + high_floor
+            elif max(x,y) > out_of_square:
+                mask[x,y,:] = 1
+            else:
+                mask[x,y,:] = high_floor
+    n_mask = 1 - mask
+    inv_img_dct = img_dct * mask
+    var_img_dct = img_dct * n_mask * (np.random.normal(1,scale=noise_scale,size=(1,1,c))).clip(0,2)
+    new_img = ImageIDCT(inv_img_dct + var_img_dct)
+
+    return new_img
+
