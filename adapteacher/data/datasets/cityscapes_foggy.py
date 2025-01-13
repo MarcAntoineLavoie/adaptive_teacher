@@ -156,7 +156,7 @@ def _cityscapes_files_to_dict(files, from_json, to_polygons):
     """
     from cityscapesscripts.helpers.labels import id2label, name2label
 
-    image_file, instance_id_file, _, json_file = files
+    image_file, instance_id_file, label_file, json_file = files
 
     annos = []
 
@@ -291,12 +291,17 @@ def _cityscapes_files_to_dict(files, from_json, to_polygons):
                 anno["segmentation"] = mask_util.encode(mask[:, :, None])[0]
             annos.append(anno)
     ret["annotations"] = annos
+    
+    # semantic seg
+    ret['sem_seg_file_name'] = label_file
+
     return ret
 
 
 import pickle
 def load_ACDC_instances(gt_dir):
     f_in = '/'.join((gt_dir,'img_anno'))
+
     with open(f_in, 'rb') as fin:
         data_dict = pickle.load(fin)
 
@@ -308,6 +313,13 @@ def load_ACDC_instances(gt_dir):
     for dict_per_image in data_dict:
         for anno in dict_per_image["annotations"]:
             anno["category_id"] = dataset_id_to_contiguous_id[anno["category_id"]]
+        file_name_split = dict_per_image['file_name'].split('/')
+        file_name_split[-5] = 'gt'
+        file_name_split[-6] = 'gt_trainval'
+        img_name_split = file_name_split[-1].split('_',3)
+        img_name_split[-1] = 'gt_labelIds.png'
+        file_name_split[-1] = ('_').join(img_name_split)
+        dict_per_image['sem_seg_file_name'] = ('/').join(file_name_split)
     return data_dict
 
 def load_BDD_instances(gt_dir):

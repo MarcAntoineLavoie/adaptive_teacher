@@ -29,12 +29,13 @@ from adapteacher.data.build import (
     build_detection_semisup_train_loader_two_crops,
     build_detection_unlabel_train_loader,
 )
-from adapteacher.data.dataset_mapper import DatasetMapperTwoCropSeparate, DatasetMapperWithWeakAugs, DatasetMapperWithStrongAugs, DatasetMapperTwoCropSeparate_detect, DatasetMapper_test
+from adapteacher.data.dataset_mapper import DatasetMapperTwoCropSeparate, DatasetMapperWithWeakAugs, DatasetMapperWithStrongAugs, DatasetMapperTwoCropSeparate_detect, DatasetMapper_test, DatasetMapper_instance_segm
 from adapteacher.engine.hooks import LossEvalHook
 from adapteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
 from adapteacher.checkpoint.detection_checkpoint import DetectionTSCheckpointer
 from adapteacher.solver.build import build_lr_scheduler
 from adapteacher.evaluation import PascalVOCDetectionEvaluator, COCOEvaluator
+from adapteacher.evaluation import newSemsSegEvaluator
 
 from .probe import OpenMatchTrainerProbe
 import copy
@@ -82,6 +83,7 @@ import pickle
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Type, Union
 from detectron2.solver import build_optimizer as default_optimizer
 from detectron2.solver.build import maybe_add_gradient_clipping, get_default_optimizer_params, reduce_param_groups
+from adapteacher.modeling.meta_arch.rcnn import DAobjTwoStagePseudoLabPanopticFPN
 
 # pedestrian		0,93,192+x
 # rider			0,97,170+x
@@ -401,13 +403,14 @@ class ATeacherTrainer(DefaultTrainer):
             self.PL_swap = None
 
         self.easy_dino_only = cfg.SEMISUPNET.DINO_ALIGN_EASY_ONLY       
-            
-        optimizer = self.build_optimizer(cfg, model)
 
         # create an teacher model
         if cfg_lazy:
+            cfg_lazy.optimizer.params.model = model
+            optimizer = instantiate(cfg_lazy.optimizer)
             model_teacher = self.build_lazy_model(cfg_lazy)
-        else:
+        else:            
+            optimizer = self.build_optimizer(cfg, model)
             model_teacher = self.build_model(cfg)
         self.model_teacher = model_teacher
 
@@ -817,84 +820,84 @@ class ATeacherTrainer(DefaultTrainer):
         
         return label_list
     
-    def test_with_gen(self, cfg, model, evaluators=None, gen_labels=False, gen_dir=''):
-        """
-        Evaluate the given model. The given model is expected to already contain
-        weights to evaluate.
+    # def test_with_gen(self, cfg, model, evaluators=None, gen_labels=False, gen_dir=''):
+    #     """
+    #     Evaluate the given model. The given model is expected to already contain
+    #     weights to evaluate.
 
-        Args:
-            cfg (CfgNode):
-            model (nn.Module):
-            evaluators (list[DatasetEvaluator] or None): if None, will call
-                :meth:`build_evaluator`. Otherwise, must have the same length as
-                ``cfg.DATASETS.TEST``.
-            gen_labels: if True, saves generated proposals to file
-            gen_dir: path to save generated proposals
+    #     Args:
+    #         cfg (CfgNode):
+    #         model (nn.Module):
+    #         evaluators (list[DatasetEvaluator] or None): if None, will call
+    #             :meth:`build_evaluator`. Otherwise, must have the same length as
+    #             ``cfg.DATASETS.TEST``.
+    #         gen_labels: if True, saves generated proposals to file
+    #         gen_dir: path to save generated proposals
 
-        Returns:
-            dict: a dict of result metrics
-        """
-        logger = logging.getLogger(__name__)
-        if isinstance(evaluators, DatasetEvaluator):
-            evaluators = [evaluators]
-        if evaluators is not None:
-            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(
-                len(cfg.DATASETS.TEST), len(evaluators)
-            )
+    #     Returns:
+    #         dict: a dict of result metrics
+    #     """
+    #     logger = logging.getLogger(__name__)
+    #     if isinstance(evaluators, DatasetEvaluator):
+    #         evaluators = [evaluators]
+    #     if evaluators is not None:
+    #         assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(
+    #             len(cfg.DATASETS.TEST), len(evaluators)
+    #         )
 
-        results = OrderedDict()
-        for idx, dataset_name in enumerate(cfg.DATASETS.TEST):
-            data_loader = self.build_test_loader(cfg, dataset_name)
-            print(idx)
-            if idx > 10:
-                print('done')
-                break
-            # When evaluators are passed in as arguments,
-            # implicitly assume that evaluators can be created before data_loader.
-            if evaluators is not None:
-                evaluator = evaluators[idx]
-            else:
-                try:
-                    evaluator = self.build_evaluator(cfg, dataset_name)
-                except NotImplementedError:
-                    logger.warn(
-                        "No evaluator found. Use `DefaultTrainer.test(evaluators=)`, "
-                        "or implement its `build_evaluator` method."
-                    )
-                    results[dataset_name] = {}
-                    continue
-            name_split = dataset_name.split('_')
-            if name_split[0] == 'ACDC' and name_split[1] == 'train' and gen_labels:
-                output_file = gen_dir + 'dino_anno_{}.pkl'.format(dataset_name)
-                results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
-                with open(output_file, 'wb') as f_out:
-                    pickle.dump(outputs, f_out)
-            if name_split[0] == 'cityscapes' and name_split[-1] == 'train' and gen_labels:
-                output_file = gen_dir + 'dino_anno_{}.pkl'.format(dataset_name)
-                results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
-                with open(output_file, 'wb') as f_out:
-                    pickle.dump(outputs, f_out)
-            if name_split[0] == 'BDD' and name_split[-1] == 'train' and gen_labels:
-                output_file = gen_dir + 'dino_anno_{}.pkl'.format(dataset_name)
-                results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
-                with open(output_file, 'wb') as f_out:
-                    pickle.dump(outputs, f_out)
-            else:
-                results_i = inference_on_dataset(model, data_loader, evaluator)
-            results[dataset_name] = results_i
-            if comm.is_main_process():
-                assert isinstance(
-                    results_i, dict
-                ), "Evaluator must return a dict on the main process. Got {} instead.".format(
-                    results_i
-                )
-                logger.info("Evaluation results for {} in csv format:".format(dataset_name))
-                print_csv_format(results_i)
+    #     results = OrderedDict()
+    #     for idx, dataset_name in enumerate(cfg.DATASETS.TEST):
+    #         data_loader = self.build_test_loader(cfg, dataset_name)
+    #         print(idx)
+    #         if idx > 10:
+    #             print('done')
+    #             break
+    #         # When evaluators are passed in as arguments,
+    #         # implicitly assume that evaluators can be created before data_loader.
+    #         if evaluators is not None:
+    #             evaluator = evaluators[idx]
+    #         else:
+    #             try:
+    #                 evaluator = self.build_evaluator(cfg, dataset_name)
+    #             except NotImplementedError:
+    #                 logger.warn(
+    #                     "No evaluator found. Use `DefaultTrainer.test(evaluators=)`, "
+    #                     "or implement its `build_evaluator` method."
+    #                 )
+    #                 results[dataset_name] = {}
+    #                 continue
+    #         name_split = dataset_name.split('_')
+    #         if name_split[0] == 'ACDC' and name_split[1] == 'train' and gen_labels:
+    #             output_file = gen_dir + 'dino_anno_{}.pkl'.format(dataset_name)
+    #             results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
+    #             with open(output_file, 'wb') as f_out:
+    #                 pickle.dump(outputs, f_out)
+    #         if name_split[0] == 'cityscapes' and name_split[-1] == 'train' and gen_labels:
+    #             output_file = gen_dir + 'dino_anno_{}.pkl'.format(dataset_name)
+    #             results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
+    #             with open(output_file, 'wb') as f_out:
+    #                 pickle.dump(outputs, f_out)
+    #         if name_split[0] == 'BDD' and name_split[-1] == 'train' and gen_labels:
+    #             output_file = gen_dir + 'dino_anno_{}.pkl'.format(dataset_name)
+    #             results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
+    #             with open(output_file, 'wb') as f_out:
+    #                 pickle.dump(outputs, f_out)
+    #         else:
+    #             results_i = inference_on_dataset(model, data_loader, evaluator)
+    #         results[dataset_name] = results_i
+    #         if comm.is_main_process():
+    #             assert isinstance(
+    #                 results_i, dict
+    #             ), "Evaluator must return a dict on the main process. Got {} instead.".format(
+    #                 results_i
+    #             )
+    #             logger.info("Evaluation results for {} in csv format:".format(dataset_name))
+    #             print_csv_format(results_i)
 
-        if len(results) == 1:
-            results = list(results.values())[0]
-        return results
-    
+    #     if len(results) == 1:
+    #         results = list(results.values())[0]
+    #     return results
+
     # def get_label_test(self, label_data):
     #     label_list = []
     #     for label_datum in label_data:
@@ -1383,7 +1386,11 @@ class ATeacherTrainer(DefaultTrainer):
 
     @classmethod
     def build_test_loader(cls, cfg, dataset_name):
-        return build_detection_test_loader(cfg, dataset_name)
+        if cfg.SEMISUPNET.EVAL_SEM_SEG:
+            mapper = DatasetMapper_instance_segm(cfg,True)
+        else:
+            mapper = None
+        return build_detection_test_loader(cfg, dataset_name, mapper=mapper)
 
     def build_hooks(self):
         cfg = self.cfg.clone()
@@ -1562,6 +1569,89 @@ class ATeacherTrainer(DefaultTrainer):
             ret.append(hooks.PeriodicWriter(self.build_writers(), period=20))
         return ret
     
+    @classmethod
+    def test(cls, cfg, model, evaluators=None):
+        """
+        Evaluate the given model. The given model is expected to already contain
+        weights to evaluate.
+
+        Args:
+            cfg (CfgNode):
+            model (nn.Module):
+            evaluators (list[DatasetEvaluator] or None): if None, will call
+                :meth:`build_evaluator`. Otherwise, must have the same length as
+                ``cfg.DATASETS.TEST``.
+
+        Returns:
+            dict: a dict of result metrics
+        """
+        logger = logging.getLogger(__name__)
+        if isinstance(evaluators, DatasetEvaluator):
+            evaluators = [evaluators]
+        if evaluators is not None:
+            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(
+                len(cfg.DATASETS.TEST), len(evaluators)
+            )
+
+        results = OrderedDict()
+        for idx, dataset_name in enumerate(cfg.DATASETS.TEST):
+            data_loader = cls.build_test_loader(cfg, dataset_name)
+            # When evaluators are passed in as arguments,
+            # implicitly assume that evaluators can be created before data_loader.
+            if evaluators is not None:
+                evaluator = evaluators[idx]
+            elif dataset_name == 'cityscapes_fine_instance_seg_train':
+                evaluator = COCOEvaluator(dataset_name, output_dir=os.path.join(cfg.OUTPUT_DIR, "inference"))
+            else:
+                try:
+                    evaluator = cls.build_evaluator(cfg, dataset_name)
+                except NotImplementedError:
+                    logger.warn(
+                        "No evaluator found. Use `DefaultTrainer.test(evaluators=)`, "
+                        "or implement its `build_evaluator` method."
+                    )
+                    results[dataset_name] = {}
+                    continue
+            name_split = dataset_name.split('_')
+            if name_split[0] == 'ACDC' and name_split[1] == 'train':
+                output_file = '/media/marc/data_checks1/acdc/gt_detection_trainval/gt_detection/{}/train/dino_anno_vitg10k.pkl'.format(name_split[2])
+                results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
+                import pickle
+                with open(output_file, 'wb') as f_out:
+                    pickle.dump(outputs, f_out)
+            # if name_split[0] == 'cityscapes' and name_split[-1] == 'train':
+            #     output_file = '/media/marc/data_checks1/cityscapes/gtFine_trainvaltest/gtFine/{}_dino_anno_vitg_highres.pkl'.format(dataset_name)
+            #     results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
+            #     import pickle
+            #     with open(output_file, 'wb') as f_out:
+            #         pickle.dump(outputs, f_out)
+            # if name_split[0] == 'BDD' and name_split[-1] == 'train':
+            #     output_file = '/media/marc/data_checks1/cityscapes/gtFine_trainvaltest/gtFine/{}_dino_anno_vitg_high_res.pkl'.format(dataset_name)
+            #     results_i, outputs = inference_on_dataset(model, data_loader, evaluator, get_outs=True)
+            #     import pickle
+            #     with open(output_file, 'wb') as f_out:
+            #         pickle.dump(outputs, f_out)
+            else:
+                if type(model) == DAobjTwoStagePseudoLabPanopticFPN and cfg.SEMISUPNET.EVAL_SEM_SEG:
+                    evaluator_sem = newSemsSegEvaluator(dataset_name,seg_instances_only=cfg.SEMISUPNET.SEG_INSTANCES_ONLY, ignore_label=255)
+                    evaluator = [evaluator,evaluator_sem]
+                results_i = inference_on_dataset(model, data_loader, evaluator)
+            results[dataset_name] = results_i
+
+            if comm.is_main_process():
+                assert isinstance(
+                    results_i, dict
+                ), "Evaluator must return a dict on the main process. Got {} instead.".format(
+                    results_i
+                )
+                logger.info("Evaluation results for {} in csv format:".format(dataset_name))
+                print_csv_format(results_i)
+
+        if len(results) == 1:
+            results = list(results.values())[0]
+        return results
+
+
     def test_DINO(self):
         self.model = self.model.eval()
         self.branch = "supervised"

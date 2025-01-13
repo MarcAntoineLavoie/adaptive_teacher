@@ -10,11 +10,12 @@ from detectron2.config import configurable
 # from detectron2.modeling.meta_arch.build import META_ARCH_REGISTRY
 # from detectron2.modeling.meta_arch.rcnn import GeneralizedRCNN
 import logging
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, Tuple, List, Optional, Union, Callable
 from collections import OrderedDict
 from detectron2.modeling.proposal_generator import build_proposal_generator
 from detectron2.modeling.backbone import build_backbone, Backbone
 from detectron2.modeling.roi_heads import build_roi_heads
+from detectron2.modeling.meta_arch.semantic_seg import build_sem_seg_head
 from detectron2.utils.events import get_event_storage
 from detectron2.structures import ImageList, Instances
 # from adapteacher.modeling.prob_rcnn import ProbabilisticFastRCNNOutputLayers
@@ -23,6 +24,8 @@ from detectron2.layers import Conv2d
 from detectron2.layers import get_norm
 import fvcore.nn.weight_init as weight_init
 from detectron2.config import instantiate
+
+from detectron2.modeling.meta_arch.semantic_seg import SEM_SEG_HEADS_REGISTRY
 
 ############### Image discriminator ##############
 class FCDiscriminator_img(nn.Module):
@@ -1982,3 +1985,535 @@ def ProjBackbone(cfg,backbone,dino_dim=768):
     else:
         projection_layer = nn.Sequential(nn.Conv2d(cnn_dim, dino_dim, 1, 1))
     return projection_layer
+
+from detectron2.modeling.postprocessing import detector_postprocess, sem_seg_postprocess
+@META_ARCH_REGISTRY.register()
+class DAobjTwoStagePseudoLabPanopticFPN(GeneralizedRCNN):
+
+    @configurable
+    def __init__(
+        self,
+        *,
+        backbone: Backbone,
+        proposal_generator: nn.Module,
+        roi_heads: nn.Module,
+        pixel_mean: Tuple[float],
+        pixel_std: Tuple[float],
+        input_format: Optional[str] = None,
+        vis_period: int = 0,
+        dis_type: str,
+        sem_seg_head: nn.Module,
+        combine_overlap_thresh: float = 0.5,
+        combine_stuff_area_thresh: float = 4096,
+        combine_instances_score_thresh: float = 0.5,
+        train_det_target: bool = True,
+        train_segm_source: bool = False,
+        train_segm_target: bool = False,
+    ):
+        """
+        Args:
+            backbone: a backbone module, must follow detectron2's backbone interface
+            proposal_generator: a module that generates proposals using backbone features
+            roi_heads: a ROI head that performs per-region computation
+            pixel_mean, pixel_std: list or tuple with #channels element, representing
+                the per-channel mean and std to be used to normalize the input image
+            input_format: describe the meaning of channels of input. Needed by visualization
+            vis_period: the period to run visualization. Set to 0 to disable.
+        """
+        super(GeneralizedRCNN, self).__init__()
+        self.backbone = backbone
+        self.proposal_generator = proposal_generator
+        self.roi_heads = roi_heads
+        self.sem_seg_head = sem_seg_head
+        self.dis_type = dis_type
+        # options when combining instance & semantic outputs
+        self.combine_overlap_thresh = combine_overlap_thresh
+        self.combine_stuff_area_thresh = combine_stuff_area_thresh
+        self.combine_instances_score_thresh = combine_instances_score_thresh
+        self.train_det_target = train_det_target
+        self.train_segm_source = train_segm_source
+        self.train_segm_target = train_segm_target
+
+        self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type])
+
+        self.input_format = input_format
+        self.vis_period = vis_period
+        if vis_period > 0:
+            assert input_format is not None, "input_format is required for visualization!"
+
+        self.register_buffer("pixel_mean", torch.tensor(pixel_mean).view(-1, 1, 1), False)
+        self.register_buffer("pixel_std", torch.tensor(pixel_std).view(-1, 1, 1), False)
+        assert (
+            self.pixel_mean.shape == self.pixel_std.shape
+        ), f"{self.pixel_mean} and {self.pixel_std} have different shapes!"
+        # @yujheli: you may need to build your discriminator here
+
+    @classmethod
+    def from_config(cls, cfg):
+        backbone = build_backbone(cfg)
+        dino_out_dim_dict = {'dinov2_vits14':384,'dinov2_vitb14':768,'dinov2_vitl14':1024,'dinov2_vitg14':1536,'dinov2_vitb14_reg4':768}
+        proposal_generator = build_proposal_generator(cfg, backbone.output_shape())
+        roi_heads = build_roi_heads(cfg, backbone.output_shape())
+        if cfg.SEMISUPNET.SEG_SOURCE:
+            seg_head = build_sem_seg_head(cfg, backbone.output_shape())
+        else:
+            seg_head = None
+        return {
+            "backbone": backbone,
+            "proposal_generator": proposal_generator,
+            "roi_heads": roi_heads,
+            "input_format": cfg.INPUT.FORMAT,
+            "vis_period": cfg.VIS_PERIOD,
+            "pixel_mean": cfg.MODEL.PIXEL_MEAN,
+            "pixel_std": cfg.MODEL.PIXEL_STD,
+            "dis_type": cfg.SEMISUPNET.DIS_TYPE,
+            # "dis_loss_ratio": cfg.xxx,
+            "sem_seg_head": seg_head,
+            "combine_overlap_thresh": cfg.MODEL.PANOPTIC_FPN.COMBINE.OVERLAP_THRESH,
+            "combine_stuff_area_thresh": cfg.MODEL.PANOPTIC_FPN.COMBINE.STUFF_AREA_LIMIT,
+            "combine_instances_score_thresh": cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH,  # noqa
+            "train_det_target": cfg.SEMISUPNET.DET_TARGET,
+            "train_segm_source": cfg.SEMISUPNET.SEG_SOURCE,
+            "train_segm_target": cfg.SEMISUPNET.SEG_TARGET
+        }
+
+    def preprocess_image_train(self, batched_inputs: List[Dict[str, torch.Tensor]]):
+        """
+        Normalize, pad and batch the input images.
+        """
+        images = [x["image"].to(self.device) for x in batched_inputs]
+        images = [(x - self.pixel_mean) / self.pixel_std for x in images]
+        images = ImageList.from_tensors(images, self.backbone.size_divisibility)
+
+        images_t = [x["image_unlabeled"].to(self.device) for x in batched_inputs]
+        images_t = [(x - self.pixel_mean) / self.pixel_std for x in images_t]
+        images_t = ImageList.from_tensors(images_t, self.backbone.size_divisibility)
+
+        return images, images_t
+
+    def forward(
+        self, batched_inputs, branch="supervised", given_proposals=None, val_mode=False, backbone_only=False,
+    ):
+        """
+        Args:
+            batched_inputs: a list, batched outputs of :class:`DatasetMapper` .
+                Each item in the list contains the inputs for one image.
+                For now, each item in the list is a dict that contains:
+
+                * image: Tensor, image in (C, H, W) format.
+                * instances (optional): groundtruth :class:`Instances`
+                * proposals (optional): :class:`Instances`, precomputed proposals.
+
+                Other information that's included in the original dicts, such as:
+
+                * "height", "width" (int): the output resolution of the model, used in inference.
+                  See :meth:`postprocess` for details.
+
+        Returns:
+            list[dict]:
+                Each dict is the output for one input image.
+                The dict contains one key "instances" whose value is a :class:`Instances`.
+                The :class:`Instances` object has the following keys:
+                "pred_boxes", "pred_classes", "scores", "pred_masks", "pred_keypoints"
+        """
+        if backbone_only:
+            images = self.preprocess_image(batched_inputs)
+            features = self.backbone(images.tensor)
+            return features
+        elif (not self.training) and (not val_mode):  # only conduct when testing mode
+            return self.inference(batched_inputs)
+
+        source_label = 0
+        target_label = 1
+
+        if branch == "domain":
+            if 0:
+                pass
+            else:
+                images_s, images_t = self.preprocess_image_train(batched_inputs)
+
+                features = self.backbone(images_s.tensor)
+                features_s = grad_reverse(features[self.dis_type])
+                D_img_out_s = self.D_img(features_s)
+                loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
+
+                features_t = self.backbone(images_t.tensor)
+                features_t = grad_reverse(features_t[self.dis_type])
+                D_img_out_t = self.D_img(features_t)
+                loss_D_img_t = F.binary_cross_entropy_with_logits(D_img_out_t, torch.FloatTensor(D_img_out_t.data.size()).fill_(target_label).to(self.device))
+
+                losses = {}
+                losses["loss_D_img_s"] = loss_D_img_s
+                losses["loss_D_img_t"] = loss_D_img_t
+                return losses, [], [], None
+
+        images = self.preprocess_image(batched_inputs)
+
+        if "instances" in batched_inputs[0]:
+            gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+        else:
+            gt_instances = None
+
+        features = self.backbone(images.tensor)
+
+        # TODO: remove the usage of if else here. This needs to be re-organized
+        if branch == "supervised":
+            features_s = grad_reverse(features[self.dis_type])
+            D_img_out_s = self.D_img(features_s)
+            loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
+            
+            # Region proposal network
+            proposals_rpn, proposal_losses = self.proposal_generator(
+                images, features, gt_instances
+            )
+
+            # roi_head lower branch
+            _, detector_losses = self.roi_heads(
+                images,
+                features,
+                proposals_rpn,
+                compute_loss=True,
+                targets=gt_instances,
+                branch=branch,
+            )
+
+            if self.train_segm_source:
+                assert "sem_seg" in batched_inputs[0]
+                gt_sem_seg = [x["sem_seg"].to(self.device) for x in batched_inputs]
+                gt_sem_seg = ImageList.from_tensors(
+                    gt_sem_seg,
+                    self.backbone.size_divisibility,
+                    self.sem_seg_head.ignore_value,
+                    self.backbone.padding_constraints,
+                ).tensor
+                sem_seg_results, sem_seg_losses = self.sem_seg_head(features, gt_sem_seg)
+
+            # visualization
+            if self.vis_period > 0:
+                storage = get_event_storage()
+                if storage.iter % self.vis_period == 0:
+                    self.visualize_training(batched_inputs, proposals_rpn, branch)
+
+            losses = {}
+            losses.update(detector_losses)
+            losses.update(proposal_losses)
+            if self.train_segm_source:
+                losses.update(sem_seg_losses)
+            losses["loss_D_img_s"] = loss_D_img_s*0.
+            print([x.item() for x in proposal_losses.values()])
+            return losses, [], [], None
+
+        elif branch == "supervised_target":
+        # Region proposal network
+            proposals_rpn, proposal_losses = self.proposal_generator(
+                images, features, gt_instances
+            )
+
+            # roi_head lower branch
+            _, detector_losses = self.roi_heads(
+                images,
+                features,
+                proposals_rpn,
+                compute_loss=True,
+                targets=gt_instances,
+                branch=branch,
+            )
+
+            if self.train_segm_target:
+                assert "sem_seg" in batched_inputs[0]
+                gt_sem_seg = [x["sem_seg"].to(self.device) for x in batched_inputs]
+                gt_sem_seg = ImageList.from_tensors(
+                    gt_sem_seg,
+                    self.backbone.size_divisibility,
+                    self.sem_seg_head.ignore_value,
+                    self.backbone.padding_constraints,
+                ).tensor
+                sem_seg_results, sem_seg_losses = self.sem_seg_head(features, gt_sem_seg)
+
+            # visualization
+            if self.vis_period > 0:
+                storage = get_event_storage()
+                if storage.iter % self.vis_period == 0:
+                    self.visualize_training(batched_inputs, proposals_rpn, branch)
+
+            losses = {}
+            losses.update(detector_losses)
+            losses.update(proposal_losses)
+            if self.train_segm_target:
+                losses.update(sem_seg_losses)
+            return losses, [], [], None
+
+        elif branch == "unsup_data_weak":
+            """
+            unsupervised weak branch: input image without any ground-truth label; output proposals of rpn and roi-head
+            """
+            # Region proposal network
+            proposals_rpn, _ = self.proposal_generator( 
+                images, features, None, compute_loss=False
+            )
+
+            # roi_head lower branch (keep this for further production)
+            # notice that we do not use any target in ROI head to do inference!
+            proposals_roih, ROI_predictions = self.roi_heads(
+                images,
+                features,
+                proposals_rpn,
+                targets=None,
+                compute_loss=False,
+                branch=branch,
+            )
+
+            if self.train_segm_target:
+                proposals_semantic, _ = self.sem_seg_head(images, inference=True)
+            else:
+                proposals_semantic = None
+
+            return {}, proposals_rpn, proposals_roih, ROI_predictions, proposals_semantic
+        elif branch == "unsup_data_strong":
+            raise NotImplementedError()
+        elif branch == "val_loss":
+            raise NotImplementedError()
+
+    def visualize_training(self, batched_inputs, proposals, branch=""):
+        """
+        This function different from the original one:
+        - it adds "branch" to the `vis_name`.
+
+        A function used to visualize images and proposals. It shows ground truth
+        bounding boxes on the original image and up to 20 predicted object
+        proposals on the original image. Users can implement different
+        visualization functions for different models.
+
+        Args:
+            batched_inputs (list): a list that contains input to the model.
+            proposals (list): a list that contains predicted proposals. Both
+                batched_inputs and proposals should have the same length.
+        """
+        from detectron2.utils.visualizer import Visualizer
+
+        storage = get_event_storage()
+        max_vis_prop = 20
+
+        for input, prop in zip(batched_inputs, proposals):
+            img = input["image"]
+            img = convert_image_to_rgb(img.permute(1, 2, 0), self.input_format)
+            v_gt = Visualizer(img, None)
+            v_gt = v_gt.overlay_instances(boxes=input["instances"].gt_boxes)
+            anno_img = v_gt.get_image()
+            box_size = min(len(prop.proposal_boxes), max_vis_prop)
+            v_pred = Visualizer(img, None)
+            v_pred = v_pred.overlay_instances(
+                boxes=prop.proposal_boxes[0:box_size].tensor.cpu().numpy()
+            )
+            prop_img = v_pred.get_image()
+            vis_img = np.concatenate((anno_img, prop_img), axis=1)
+            vis_img = vis_img.transpose(2, 0, 1)
+            vis_name = (
+                "Left: GT bounding boxes "
+                + branch
+                + ";  Right: Predicted proposals "
+                + branch
+            )
+            storage.put_image(vis_name, vis_img)
+            break  # only visualize one image in a batch
+
+    def inference(
+        self,
+        batched_inputs: List[Dict[str, torch.Tensor]],
+        detected_instances: Optional[List[Instances]] = None,
+        do_postprocess: bool = True,
+    ):
+        """
+        Run inference on the given inputs.
+
+        Args:
+            batched_inputs (list[dict]): same as in :meth:`forward`
+            detected_instances (None or list[Instances]): if not None, it
+                contains an `Instances` object per image. The `Instances`
+                object contains "pred_boxes" and "pred_classes" which are
+                known boxes in the image.
+                The inference will then skip the detection of bounding boxes,
+                and only predict other per-ROI outputs.
+            do_postprocess (bool): whether to apply post-processing on the outputs.
+
+        Returns:
+            When do_postprocess=True, same as in :meth:`forward`.
+            Otherwise, a list[Instances] containing raw network outputs.
+        """
+        assert not self.training
+
+        images = self.preprocess_image(batched_inputs)
+        features = self.backbone(images.tensor)
+
+        if detected_instances is None:
+            if self.proposal_generator is not None:
+                proposals, _ = self.proposal_generator(images, features, None)
+            else:
+                assert "proposals" in batched_inputs[0]
+                proposals = [x["proposals"].to(self.device) for x in batched_inputs]
+
+            detector_results, _ = self.roi_heads(images, features, proposals, None)
+        else:
+            detected_instances = [x.to(self.device) for x in detected_instances]
+            detector_results = self.roi_heads.forward_with_given_boxes(features, detected_instances)
+
+        if self.sem_seg_head is not None:
+            sem_seg_results, _ = self.sem_seg_head(features, None)
+
+        if do_postprocess:
+            assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
+            # return GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
+            results = []
+            for sem_seg_result, detector_result, input_per_image, image_size in zip(
+                sem_seg_results, detector_results, batched_inputs, images.image_sizes
+            ):
+                height = input_per_image.get("height", image_size[0])
+                width = input_per_image.get("width", image_size[1])
+                sem_seg_r = sem_seg_postprocess(sem_seg_result, image_size, height, width)
+                detector_r = detector_postprocess(detector_result, height, width)
+
+                results.append({"sem_seg": sem_seg_r, "instances": detector_r})
+
+                # panoptic_r = combine_semantic_and_instance_outputs(
+                #     detector_r,
+                #     sem_seg_r.argmax(dim=0),
+                #     self.combine_overlap_thresh,
+                #     self.combine_stuff_area_thresh,
+                #     self.combine_instances_score_thresh,
+                # )
+                # processed_results[-1]["panoptic_seg"] = panoptic_r
+        else:
+            results = {'instances':detector_results, 'sem_seg':sem_seg_results}
+        return results
+
+
+@SEM_SEG_HEADS_REGISTRY.register()
+class DASemSegFPNHead(nn.Module):
+    """
+    A semantic segmentation head described in :paper:`PanopticFPN`.
+    It takes a list of FPN features as input, and applies a sequence of
+    3x3 convs and upsampling to scale all of them to the stride defined by
+    ``common_stride``. Then these features are added and used to make final
+    predictions by another 1x1 conv layer.
+    """
+
+    @configurable
+    def __init__(
+        self,
+        input_shape: Dict[str, ShapeSpec],
+        *,
+        num_classes: int,
+        conv_dims: int,
+        common_stride: int,
+        loss_weight: float = 1.0,
+        norm: Optional[Union[str, Callable]] = None,
+        ignore_value: int = -1,
+    ):
+        """
+        NOTE: this interface is experimental.
+
+        Args:
+            input_shape: shapes (channels and stride) of the input features
+            num_classes: number of classes to predict
+            conv_dims: number of output channels for the intermediate conv layers.
+            common_stride: the common stride that all features will be upscaled to
+            loss_weight: loss weight
+            norm (str or callable): normalization for all conv layers
+            ignore_value: category id to be ignored during training.
+        """
+        super().__init__()
+        input_shape = sorted(input_shape.items(), key=lambda x: x[1].stride)
+        if not len(input_shape):
+            raise ValueError("SemSegFPNHead(input_shape=) cannot be empty!")
+        self.in_features = [k for k, v in input_shape]
+        feature_strides = [v.stride for k, v in input_shape]
+        feature_channels = [v.channels for k, v in input_shape]
+
+        self.ignore_value = ignore_value
+        self.common_stride = common_stride
+        self.loss_weight = loss_weight
+
+        self.scale_heads = []
+        for in_feature, stride, channels in zip(
+            self.in_features, feature_strides, feature_channels
+        ):
+            head_ops = []
+            head_length = max(1, int(np.log2(stride) - np.log2(self.common_stride)))
+            for k in range(head_length):
+                norm_module = get_norm(norm, conv_dims)
+                conv = Conv2d(
+                    channels if k == 0 else conv_dims,
+                    conv_dims,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    bias=not norm,
+                    norm=norm_module,
+                    activation=F.relu,
+                )
+                weight_init.c2_msra_fill(conv)
+                head_ops.append(conv)
+                if stride != self.common_stride:
+                    head_ops.append(
+                        nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+                    )
+            self.scale_heads.append(nn.Sequential(*head_ops))
+            self.add_module(in_feature, self.scale_heads[-1])
+        self.predictor = Conv2d(conv_dims, num_classes, kernel_size=1, stride=1, padding=0)
+        weight_init.c2_msra_fill(self.predictor)
+
+    @classmethod
+    def from_config(cls, cfg, input_shape: Dict[str, ShapeSpec]):
+        if cfg.SEMISUPNET.SEG_INSTANCES_ONLY:
+            n_classes = cfg.MODEL.ROI_HEADS.NUM_CLASSES
+        else:
+            n_classes = cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES
+        return {
+            "input_shape": {
+                k: v for k, v in input_shape.items() if k in cfg.MODEL.SEM_SEG_HEAD.IN_FEATURES
+            },
+            "ignore_value": cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
+            "num_classes": n_classes,
+            "conv_dims": cfg.MODEL.SEM_SEG_HEAD.CONVS_DIM,
+            "common_stride": cfg.MODEL.SEM_SEG_HEAD.COMMON_STRIDE,
+            "norm": cfg.MODEL.SEM_SEG_HEAD.NORM,
+            "loss_weight": cfg.MODEL.SEM_SEG_HEAD.LOSS_WEIGHT,
+        }
+    
+    def forward(self, features, targets=None, inference=False):
+        """
+        Returns:
+            In training, returns (None, dict of losses)
+            In inference, returns (CxHxW logits, {})
+        """
+        x = self.layers(features)
+        if self.training and not inference:
+            return None, self.losses(x, targets)
+        else:
+            x = F.interpolate(
+                x, scale_factor=self.common_stride, mode="bilinear", align_corners=False
+            )
+            return x, {}
+
+    def layers(self, features):
+        for i, f in enumerate(self.in_features):
+            if i == 0:
+                x = self.scale_heads[i](features[f])
+            else:
+                x = x + self.scale_heads[i](features[f])
+        x = self.predictor(x)
+        return x
+
+    def losses(self, predictions, targets):
+        predictions = predictions.float()  # https://github.com/pytorch/pytorch/issues/48163
+        predictions = F.interpolate(
+            predictions,
+            scale_factor=self.common_stride,
+            mode="bilinear",
+            align_corners=False,
+        )
+        loss = F.cross_entropy(
+            predictions, targets, reduction="mean", ignore_index=self.ignore_value
+        )
+        losses = {"loss_sem_seg": loss * self.loss_weight}
+        return losses
