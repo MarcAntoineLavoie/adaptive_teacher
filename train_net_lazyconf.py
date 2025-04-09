@@ -38,6 +38,8 @@ from detectron2.utils.events import (
 )
 from detectron2.checkpoint import DetectionCheckpointer
 # from detrex.checkpoint import DetectionCheckpointer
+from adapteacher.checkpoint.detection_checkpoint import DetectionTSCheckpointer
+from adapteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
 
 from detrex.utils import WandbWriter
 from detrex.modeling import ema
@@ -430,6 +432,9 @@ def main(args):
     cfg_base.set_new_allowed(True)
     add_ateacher_config(cfg_base)
     cfg_base.merge_from_file(args.run_cfg)
+    cfg_base.merge_from_list(args.opts)
+
+    cfg.model.label_noise_ratio = cfg_base.SEMISUPNET.DN_LABEL_NOISE_RATIO
     default_setup(cfg_base, args)
 
     # Enable fast debugging by running several iterations to check for any bugs.
@@ -439,34 +444,49 @@ def main(args):
         cfg.train.log_period = 1
 
     if args.eval_only:
+        cfg.train.init_checkpoint = args.eval_checkpoint
         model = instantiate(cfg.model)
         model.to(cfg.train.device)
         model = create_ddp_model(model)
+        model_teacher = instantiate(cfg.model)
+        model_teacher.to(cfg.train.device)
+        model_teacher = create_ddp_model(model_teacher)
+
+        ensem_ts_model = EnsembleTSModel(model_teacher, model)
+        DetectionTSCheckpointer(ensem_ts_model).load(cfg.train.init_checkpoint)
+        Trainer = ATeacherTrainer
+        # res = Trainer.test(cfg_base, ensem_ts_model.modelStudent)
+        res = Trainer.test(cfg_base, ensem_ts_model.modelTeacher)
         
-        # using ema for evaluation
-        ema.may_build_model_ema(cfg, model)
-        DetectionCheckpointer(model, **ema.may_get_ema_checkpointer(cfg, model)).load(cfg.train.init_checkpoint)
-        # Apply ema state for evaluation
-        if cfg.train.model_ema.enabled and cfg.train.model_ema.use_ema_weights_for_eval_only:
-            ema.apply_model_ema(model)
-        print(do_test(cfg, model, eval_only=True))
+        # # using ema for evaluation
+        # ema.may_build_model_ema(cfg, model)
+        # DetectionCheckpointer(model, **ema.may_get_ema_checkpointer(cfg, model)).load(cfg.train.init_checkpoint)
+        # # Apply ema state for evaluation
+        # if cfg.train.model_ema.enabled and cfg.train.model_ema.use_ema_weights_for_eval_only:
+        #     ema.apply_model_ema(model)
+        # print(do_test(cfg, model, eval_only=True))
     else:
         do_train(args, cfg, cfg_base)
 
 from random import randint
 if __name__ == "__main__":
     parser = default_argument_parser()
-    parser.add_argument("--freeze-bbone", default=False, help="freeze vit backbone")
+    parser.add_argument("--freeze-bbone", default=True, help="freeze vit backbone")
     parser.add_argument("--run-cfg", default='./configs/eva_nom.yaml', help="default config")
     parser.add_argument("--bbone-cfg", default='/home/mlavoie/scripts/adaptive_teacher/dino_eva/configs/dino-eva-02/new_dino_eva_02_vitdet_b_4attn_1024_lrd0p7_4scale_12ep.py', help="default config bbone")
-    parser.add_argument("--use-wandb", default=True, help="use wandb to log run")
+    parser.add_argument("--use-wandb", default=False, help="use wandb to log run")
     args = parser.parse_args()
+    # args.opts = ['MODEL.WEIGHTS', '/home/mlavoie/scripts/adaptive_teacher/dino_eva/checkpoints/dino_eva_02_in21k_pretrain_vitdet_b_4attn_1024_lrd0p7_4scale_12ep.pth']
+    # args.opts = ['MODEL.WEIGHTS', '/home/mlavoie/scripts/adaptive_teacher/dino_eva/checkpoints/eva02_B_pt_in21k_p14to16.pt']
     # args.config_file = '/home/marc/Documents/trailab_work/uda_detect/detrex/projects/dino/configs/dino-resnet/dino_r50_4scale_12ep.py'
     # args.bbone_cfg = '/home/mlavoie/scripts/adaptive_teacher/dino_eva/configs/dino-eva-02/new_dino_eva_02_vitdet_b_4attn_1024_lrd0p7_4scale_12ep.py'
     # args.run_cfg = './configs/eva_nom.yaml'
     # args.freeze_bbone = False
     # args.num_gpus = 2
     # args.use_wandb = False
+    # args.eval_only = True
+    # args.eval_checkpoint = './output/dino/test_eva_bbone_city2bdd_new_bboneload_v1/model_0009999.pth'
+    # args.eval_checkpoint = './output/dino/test_eva_bbone_city2bdd_new_v1/model_0004999.pth'
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
     args.dist_url = (':').join(url_parts)
@@ -478,3 +498,14 @@ if __name__ == "__main__":
         dist_url=args.dist_url,
         args=(args,),
     )
+
+# file_in1 = '/home/mlavoie/scripts/adaptive_teacher/output/dino/test_eva_bbone_city2bdd_bbone_adam050_v1/model_final.pth'
+# file_in2 = '/home/mlavoie/scripts/adaptive_teacher/output/dino/test_eva_bbone_city2bdd_bbone_adam050_v1/model_0004999.pth'
+# file_in3 = '/home/mlavoie/scripts/adaptive_teacher/output/dino/test_eva_bbone_city2bdd_bbone_adam050_uf_v1/model_final.pth'
+# file_in4 = '/home/mlavoie/scripts/adaptive_teacher/output/dino/test_eva_bbone_city2bdd_bbone_adam050_uf_v1/model_0004999.pth'
+# file_in1 = './output/dino/test_eva_bbone_city2bdd_new_bboneload_v1/model_0029999.pth'
+
+# model1 = torch.load(file_in1)
+# model2 = torch.load(file_in2)
+# model3 = torch.load(file_in3)
+# model4 = torch.load(file_in4)

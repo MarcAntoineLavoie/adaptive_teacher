@@ -1,0 +1,35 @@
+MODEL:
+  META_ARCHITECTURE: "FCOS"
+  BACKBONE:
+    NAME: "build_retinanet_resnet_fpn_backbone"
+  RESNETS:
+    OUT_FEATURES: ["res2", "res3", "res4", "res5"]
+  FPN:
+    IN_FEATURES: ["res2", "res3", "res4", "res5"]
+  FCOS:
+    CENTER_SAMPLING_RADIUS: 1.5
+    NORM: "GN"
+  RETINANET:
+    IN_FEATURES: ["p3", "p4", "p5", "p6", "p7"]
+    CONV_DIMS: [256,256,256,256]
+    FOCAL_LOSS_ALPHA: 0.25
+    FOCAL_LOSS_GAMMA: 2.0
+    SCORE_THRESH_TEST: 0.05
+    TOPK_CANDIDATES_TEST: 1000
+    NMS_THRESH_TEST: 0.6
+    IOU_THRESHOLDS: [0.4, 0.5]
+    IOU_LABELS: [0, -1, 1]
+    SMOOTH_L1_LOSS_BETA: 0.0
+DATASETS:
+  TRAIN: ("coco_2017_train",)
+  TEST: ("coco_2017_val",)
+SOLVER:
+  IMS_PER_BATCH: 16
+  BASE_LR: 0.01
+  STEPS: (60000, 80000)
+  MAX_ITER: 90000
+INPUT:
+  MIN_SIZE_TRAIN: (640, 672, 704, 736, 768, 800)
+  DINO_PATCH_SIZE: 16
+  USE_RANDOM_NOISE: 16
+VERSION: 2

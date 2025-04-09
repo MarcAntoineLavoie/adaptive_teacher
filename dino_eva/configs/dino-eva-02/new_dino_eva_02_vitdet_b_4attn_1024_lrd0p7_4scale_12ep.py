@@ -23,6 +23,8 @@ model.backbone.net.mlp_ratio = 4*2/3
 model.backbone.net.use_act_checkpoint = False
 model.backbone.net.drop_path_rate = 0.1
 
+model.num_classes = 8
+
 # 2, 5, 8, 11 for global attention
 model.backbone.net.window_block_indexes = [0, 1, 3, 4, 6, 7, 9, 10]
 
@@ -44,7 +46,8 @@ train.device = "cuda"
 model.device = train.device
 
 # modify optimizer config
-optimizer.lr = 1e-4
+# optimizer.lr = 1e-4
+optimizer.lr = 5.0e-5
 optimizer.betas = (0.9, 0.999)
 optimizer.weight_decay = 1e-4
 optimizer.params.lr_factor_func = partial(get_vit_lr_decay_rate, lr_decay_rate=0.7, num_layers=12)

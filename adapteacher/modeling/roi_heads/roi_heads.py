@@ -595,8 +595,15 @@ class PanopticROIHeadsPseudoLab(StandardROIHeads):
             losses, _ = self._forward_box(
                 features, proposals, compute_loss, compute_val_loss
             )
-            losses.update(self._forward_mask(features, proposals))
+            if branch == 'supervised':
+                losses.update(self._forward_mask(features, proposals))
             return proposals, losses
+        elif self.training:
+            pred_instances, predictions = self._forward_box(
+                features, proposals, compute_loss, compute_val_loss
+            )
+            # pred_instances = self._forward_mask(features, pred_instances)
+            return pred_instances, predictions
         else:
             pred_instances, predictions = self._forward_box(
                 features, proposals, compute_loss, compute_val_loss

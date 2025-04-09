@@ -37,6 +37,10 @@ class DinoV2VitFeatureExtractor(nn.Module):
         else:
             pixel_std = [57.375, 57.120, 58.395]
             self.preprocessing = dino_preprocessing(cfg.MODEL.PIXEL_MEAN, pixel_std, is_RGB=True)
+        
+        if cfg.SEMISUPNET.DINO_HEAD == 'multi':
+            self.forward = self.forward_multi
+
         self.is_RGB = True
         self.normalize_feature = normalize_feature
         if "v2" not in model_name:
@@ -59,6 +63,8 @@ class DinoV2VitFeatureExtractor(nn.Module):
                 "dinov2_vitg14": (14, 1536, dinov2_vitg14),
                 "dinov2_vitb14_reg4": (14, 768, dinov2_vitb14_reg),
                 "dinov2_vitl14_reg4": (14, 1024, dinov2_vitl14_reg),
+                "dinov2_vitb16": (16, 768, dinov2_vitb14),
+                "dinov2_vitb16_reinbase": (16, 768, dinov2_vitb14),
             }
             # model name to model weights
             name_to_weights = {"dinov2_vits14": "dinov2_vits14_pretrain.pth",
@@ -67,6 +73,8 @@ class DinoV2VitFeatureExtractor(nn.Module):
                             "dinov2_vitg14": "dinov2_vitg14_pretrain.pth",
                             "dinov2_vitb14_reg4": "dinov2_vitb14_reg4_pretrain.pth",
                             "dinov2_vitl14_reg4": "dinov2_vitl14_reg4_pretrain.pth",
+                            "dinov2_vitb16": "dinov2_vitb14_pretrain_14to16.pth",
+                            "dinov2_vitb16_reinbase": "dinov2_vitb16_reinbase_pretrain.pth",
             }
             # load model on cpu
             self.model_name = model_name
@@ -81,11 +89,21 @@ class DinoV2VitFeatureExtractor(nn.Module):
             
             patch_size, embed_dim, model_func_name = dino_v2_models[self.model_name]
             # load model
-            self.encoder = model_func_name(pretrained=False)
-            self.encoder.load_state_dict(torch.load(path_to_pretrained_weights))
+            if patch_size == 16 and "reinbase" in model_name:
+                img_size = 512
+            elif patch_size == 16 and "v2" in model_name:
+                img_size = 592
+            else:
+                img_size = 518  
+            self.encoder = model_func_name(pretrained=False, patch_size=patch_size, img_size=img_size)
+            self.encoder.load_state_dict(torch.load(path_to_pretrained_weights),strict=False)
             if freeze:
                 for param in self.encoder.parameters():
                     param.requires_grad = False
+            for name, param in self.encoder.named_parameters():
+                if "finetune_tokens" == name:
+                    assert freeze
+                    param.requires_grad = True
             # ensure 
             assert self.encoder.embed_dim == embed_dim
             self.embed_dim = self.encoder.embed_dim
@@ -119,6 +137,30 @@ class DinoV2VitFeatureExtractor(nn.Module):
         x_grid_features = x.contiguous().transpose(1, 2).contiguous().view(batch_size, self.embed_dim, f_height, f_width)
 
         return x_grid_features
+    
+    def forward_multi(self, x):
+        x = torch.stack([img['image'] for img in x], dim=0)[:,[2,1,0],:,:].float()
+        x = self.preprocessing(x).to(device=next(self.encoder.parameters()).device)
+        batch_size, _, height, width = x.size()
+        # check image dims divisible by patch_size
+        assert (height % self.patch_size) == 0
+        assert (width % self.patch_size) == 0
+        f_height = height // self.patch_size
+        f_width = width // self.patch_size
+
+        x = self.encoder.get_intermediate_layers(x,[3,7,11]) # batch_size, num_patches, self.embed_dim
+        if "v2" not in self.model_name:
+            x = x[:,1:,:] # remove class token
+
+        x_grid_features = []
+        for feats in x:
+            if self.normalize_feature:
+                feats = F.normalize(feats, p=2, dim=2)
+
+            feats_grid_features = feats.contiguous().transpose(1, 2).contiguous().view(batch_size, self.embed_dim, f_height, f_width)
+            x_grid_features.append(feats_grid_features)
+
+        return x_grid_features
 
 class DinoAlignHead(nn.Module):
     def __init__(self, cfg, cnn_dim, dino_dim, normalize_feature=True):
@@ -147,8 +189,18 @@ class DinoAlignHead(nn.Module):
                                                    nn.Conv2d(self.proj_dim, dino_dim, 1, 1))
         elif head_type=='integrated':
             self.projection_layer = nn.Identity()
+        elif head_type=='multi':
+            self.projection_layer = nn.ModuleList()
+            cnn_dims = [int(cnn_dim/2), cnn_dim, cnn_dim]
+            for dim in cnn_dims:
+                proj_layer = nn.Sequential(nn.Conv2d(dim, 256, 1, 1),
+                                                   nl_layer,
+                                                   nn.Conv2d(256, dino_dim, 1, 1))
+                self.projection_layer.append(proj_layer)
+            self.forward = self.project_RCNN_feat_multi
         else:
             self.projection_layer = nn.Conv2d(cnn_dim, dino_dim, 1, 1)
+        print('head type', head_type, self.projection_layer)
         
         if self.loss_type == 'contrast' :
             self.scale_loss = False
@@ -171,6 +223,16 @@ class DinoAlignHead(nn.Module):
             feat_cnn = F.normalize(feat_cnn, p=2, dim=1)
         return feat_cnn
     
+    def project_RCNN_feat_multi(self, feat_cnn, h, w):
+        feat_out = []
+        for idx, key in enumerate(feat_cnn.keys()):
+            feat_temp = self.projection_layer[idx](feat_cnn[key])
+            feat_temp = F.interpolate(feat_temp, (h,w), mode='bilinear')
+            if self.normalize_feature:
+                feat_temp = F.normalize(feat_temp, p=2, dim=1)
+            feat_out.append(feat_temp)
+        return feat_out
+        
     def dino_loss(self, feat_cnn, feat_dino, return_sim=False, fg_mask=None, gt_data=None):
         if self.instance_masks and gt_data is not None:
             device = feat_cnn.device

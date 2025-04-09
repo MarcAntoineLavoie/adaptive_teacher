@@ -70,10 +70,42 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
                         pass
             return incompatible
 
+        elif 'modelStudent.model.transformer.encoder.layers.0.norms.0.weight' in checkpoint['model'].keys(): # old form in checkpoint
+            if 'modelStudent.transformer.encoder.layers.0.norms.0.weight' in self.model.state_dict().keys(): # new form in model
+                new_key = []
+                new_vals = []
+                for key, value in checkpoint['model'].items():
+                    new_key.append(key.replace('.model.','.'))
+                    new_vals.append(value)
+                checkpoint['model'] = OrderedDict(zip(new_key,new_vals))
+            incompatible = super()._load_model(checkpoint)
+            return incompatible
+
         elif 'backbone.net.rope_win.freqs_cos' in checkpoint['model'].keys(): # eva02 full
             incompatible = self._load_student_model(checkpoint, wrapped_model=True)
 
             model_buffers = dict(self.model.modelStudent.model.named_buffers(recurse=False))
+            for k in ["pixel_mean", "pixel_std"]:
+                # Ignore missing key message about pixel_mean/std.
+                # Though they may be missing in old checkpoints, they will be correctly
+                # initialized from config anyway.
+                if k in model_buffers:
+                    try:
+                        incompatible.missing_keys.remove(k)
+                    except ValueError:
+                        pass
+            return incompatible
+
+        elif 'lm_head.bias' in checkpoint['model'].keys(): # transformer
+            new_key = []
+            new_vals = []
+            for key, value in checkpoint['module'].items():
+                new_key.append('backbone.net.' + key)
+                new_vals.append(value)
+            checkpoint['model'] = OrderedDict(zip(new_key,new_vals))
+            incompatible = self._load_student_model(checkpoint, wrapped_model=True)
+
+            model_buffers = dict(self.model.modelStudent.named_buffers(recurse=False))
             for k in ["pixel_mean", "pixel_std"]:
                 # Ignore missing key message about pixel_mean/std.
                 # Though they may be missing in old checkpoints, they will be correctly
@@ -98,27 +130,6 @@ class DetectionTSCheckpointer(DetectionCheckpointer):
 
             # for non-caffe2 models, use standard ways to load it
             incompatible = self._load_student_model(checkpoint, backbone_only=True)
-
-            model_buffers = dict(self.model.modelStudent.named_buffers(recurse=False))
-            for k in ["pixel_mean", "pixel_std"]:
-                # Ignore missing key message about pixel_mean/std.
-                # Though they may be missing in old checkpoints, they will be correctly
-                # initialized from config anyway.
-                if k in model_buffers:
-                    try:
-                        incompatible.missing_keys.remove(k)
-                    except ValueError:
-                        pass
-            return incompatible
-
-        elif 'pos_embed' in checkpoint['model'].keys(): # transformer
-            new_key = []
-            new_vals = []
-            for key, value in checkpoint['module'].items():
-                new_key.append('model.backbone.net.' + key)
-                new_vals.append(value)
-            checkpoint['model'] = OrderedDict(zip(new_key,new_vals))
-            incompatible = self._load_student_model(checkpoint)
 
             model_buffers = dict(self.model.modelStudent.named_buffers(recurse=False))
             for k in ["pixel_mean", "pixel_std"]:

@@ -1,5 +1,6 @@
-_BASE_: "./Base-RCNN-DINO.yaml"
+# _BASE_: "./Base-RCNN-C4.yaml"
 # _BASE_: "./Base-RCNN-DilatedC5.yaml"
+_BASE_: "./Base-RCNN-FPN.yaml"
 # OUTPUT_DIR: "output/test_cov"
 # OUTPUT_DIR: "output/test_cov2"
 # OUTPUT_DIR: "output/test_cov_temp1"
@@ -16,12 +17,24 @@ INPUT:
   CROP:
     ENABLED: True
     # ENABLED: False
-  MIN_SIZE_TRAIN: (600,)
+  MIN_SIZE_TRAIN: (550,)
   USE_RANDOM_NOISE: False
-  DINO_PATCH_SIZE: 14
+  DINO_PATCH_SIZE: 1
   PAD_CROP: True
+  MASK_FORMAT: 'bitmask'
 MODEL:
+  # PIXEL_STD: [57.375, 57.120, 58.395]
+  PIXEL_STD: [1.,1.,1.]
+  # META_ARCHITECTURE: "TwoStagePseudoLabGeneralizedRCNN"
+  # META_ARCHITECTURE: "ProbDATwoStagePseudoLabGeneralizedRCNN"
+  META_ARCHITECTURE: "DAobjTwoStagePseudoLabGeneralizedRCNN"
+  # META_ARCHITECTURE: "DAobjTwoStagePseudoLabPanopticFPN"
+  BACKBONE:
+    # NAME: "build_vgg_backbone"
+    NAME: "build_resnet_fpn_backbone"
   MASK_ON: False
+  RESNETS:
+    DEPTH: 50
   PROPOSAL_GENERATOR:
     NAME: "PseudoLabRPN"
   # RPN:
@@ -33,8 +46,8 @@ MODEL:
     # PRE_NMS_TOPK_TRAIN: 6000
     # POST_NMS_TOPK_TRAIN: 1000
   ROI_HEADS:
-    NAME: "StandardROIHeadsPseudoLab"
-    # NAME: "ProbROIHeadsPseudoLab"
+    NAME: "PanopticROIHeadsPseudoLab"
+    # NAME: "StandardROIHeadsPseudoLab"
     LOSS: "CrossEntropy" # variant: "CrossEntropy"
     NUM_CLASSES: 8
     # IN_FEATURES: ["vgg4"]
@@ -46,6 +59,11 @@ MODEL:
     POOLER_RESOLUTION: 7
     # SMOOTH_L1_BETA: 1.0
     SMOOTH_L1_BETA_PROB: 3.0
+  MASK_ON: True
+  SEM_SEG_HEAD:
+    NAME: "DASemSegFPNHead"
+    LOSS_WEIGHT: 0.5
+    NUM_CLASSES: 19
   PROBABILISTIC_MODELING:
   # One of the following Loss types: 'none' or 'negative_log_likelihood', 'second_moment_matching', 'energy_loss'.
     BBOX_COV_LOSS:
@@ -65,8 +83,13 @@ MODEL:
     SCALE_EXPO_SCORE: 1.0
     SCALE_EXPO_IOU: 1.0
     GT_INJECT_COV_WEIGHT: 1.0
+  # WEIGHTS: "/media/marc/data_checks1/R-101.pkl"
+  # WEIGHTS: "/media/marc/data_checks1/R-50.pkl"
+  # WEIGHTS: "/media/marc/data_checks1/results_dino/cityfog/bl20k/model_0019999.pth"
+  WEIGHTS: "/home/mlavoie/scripts/adaptive_teacher/datasets/R-50.pkl"
 SOLVER:
-  LR_SCHEDULER_NAME: "WarmupTwoStageMultiStepLR"
+  # LR_SCHEDULER_NAME: "WarmupTwoStageMultiStepLR"
+  LR_SCHEDULER_NAME: "WarmupMultiStepLR"
   STEPS: (60000, 80000, 90000, 360000)
   FACTOR_LIST: (1, 1, 1, 1, 1)
   MAX_ITER: 10000
@@ -76,34 +99,43 @@ SOLVER:
   IMG_PER_BATCH_UNLABEL: 2
   # BASE_LR: 0.04
   BASE_LR: 0.01
+  # BASE_LR: 0.001
+  # CLIP_GRADIENTS:
+    # ENABLED: True
+    # CLIP_TYPE: "norm"
+    # CLIP_VALUE: 0.5
 DATALOADER:
   SUP_PERCENT: 100.0
+  # SAMPLER_TRAIN: "RepeatFactorTrainingSampler"
+  # REPEAT_THRESHOLD: 0.1
 DATASETS:
   CROSS_DATASET: True
+  TRAIN: ("cityscapes_fine_instance_seg_train",)
   TRAIN_LABEL: ("cityscapes_fine_instance_seg_train",)
-  # TRAIN_UNLABEL: ("cityscapes_fine_instance_seg_train",)
   # TRAIN_UNLABEL: ("cityscapes_foggy_train",)
   # TEST: ("cityscapes_foggy_val",)
-  TRAIN_UNLABEL: ("BDD_day_train",)
-  # TEST: ("ACDC_val_fog",)
-  # TEST: ("cityscapes_val","ACDC_val_night","BDD_day_val")
-  TEST: ("cityscapes_val","BDD_day_val")
-  # TRAIN_LABEL: ("BDD_dayclear_train",)
-  # TRAIN_UNLABEL: ("BDD_dayclear_train",)
-  # TEST: ("BDD_nightclear_val",)
+  TRAIN_UNLABEL: ("ACDC_train_night",)
+  # TRAIN_UNLABEL: ("ACDC_train_all",)
+  # TRAIN_UNLABEL: ("BDD_day_train",)
+  # TEST: ("cityscapes_fine_instance_seg_train","cityscapes_val")
+  TEST: ("cityscapes_val","ACDC_val_night")
+  # TEST: ("cityscapes_val","BDD_day_val")
+  # TEST: ("cityscapes_foggy_val002",)
+  # TRAIN_UNLABEL: ("cityscapes_foggy_train002",)
 SEMISUPNET:
-  Trainer: "ateacher"
+  # Trainer: "ateacher"
+  Trainer: "baseline"
   BBOX_THRESHOLD: 0.8
   # BBOX_THRESHOLD: 0.15
   TEACHER_UPDATE_ITER: 1
-  # BURN_UP_STEP: 20000
-  BURN_UP_STEP: 5
-  # EMA_KEEP_RATE: 0.9996
-  EMA_KEEP_RATE: 0.999
+  BURN_UP_STEP: 20000
+  # BURN_UP_STEP: 2
+  EMA_KEEP_RATE: 0.9996
+  # EMA_KEEP_RATE: 0.999
   UNSUP_LOSS_WEIGHT: 0.0
   SUP_LOSS_WEIGHT: 1.0
   # DIS_TYPE: "vgg4" #["concate","p2","multi"]
-  DIS_TYPE: "dino_out" #["concate","p2","multi"]
+  DIS_TYPE: "p2" #["concate","p2","multi"]
   DIS_LOSS_WEIGHT: 0.0
   DOMAIN_ADV_INST: 0.0
   # DOMAIN_ADV_INST: 1.0
@@ -123,7 +155,7 @@ SEMISUPNET:
   ALIGN_MAX_BATCH: 200
   ALIGN_SCALE_COUNT: False
   ALIGN_BASE_COUNT: 200
-  USE_GT_PROPOSALS: False
+  USE_GT_PROPOSALS: True
   USE_GT_PROPOSALS_ONLY: False
   ALIGN_USE_NEGATIVES: True
   ALIGN_GT_PROPOSALS: False
@@ -136,28 +168,38 @@ SEMISUPNET:
   SUPPRESS_BBOX_CORR: 1.0
   PSEUDO_THRESH_BOTH: False
   PSEUDO_OBJ_THRESH: 1.0
-  USE_DINO: True
-  DINO_LOSS_WEIGHT: 0.0
-  DINO_LOSS_WEIGHT_TARGET: 0.0
-  DINO_SOURCE_BG_WEIGHT: 0.5
+  USE_DINO: False
+  DINO_LOSS_WEIGHT: 1.0
+  DINO_LOSS_WEIGHT_TARGET: 1.0
+  DINO_SOURCE_BG_WEIGHT: 1.0
   DINO_SOURCE_FG_THRESH: 0.2
   DINO_LOSS_NORM: True
   DINO_HEAD: 'MLP'
-  DINO_MODEL: "dinov2_vits14"
-  # DINO_MODEL: "dino_vitb16"
-  DINO_INSTANCE_MASK: True
-  DINO_ALIGN_LOSS: "contrast"
-  DINO_CONT_QUEUE_LENGTH: 512
+  DINO_MODEL: "dinov2_vitb14"
+  DINO_INSTANCE_MASK: False
+  DINO_TARGET_MASK: False
+  DINO_ALIGN_LOSS: "similarity"
+  DINO_CONT_QUEUE_LENGTH: 4096
   DINO_CONT_TEMP: 0.1
-  DINO_CONT_IGNORE_CLOSEST: 0
-  DINO_BASE: True
+  DINO_CONT_IGNORE_CLOSEST: 2
+  FREEZE_POSTPRETRAIN: False
   PRETRAIN_STEPS: 0
-  DINO_LR_SCALE: 0.0
-  # DINO_TARGET_PSEUDOGT: /raid/datasets/BDD/bdd100k/labels/train/day/BDD_day_train_dino_anno.pkl
-  DINO_TARGET_PSEUDOGT: None
+  DINO_PROJ_GELU: False
+  # DINO_TARGET_PSEUDOGT: /media/marc/data_checks1/acdc/gt_detection_trainval/gt_detection/night/train/dino_anno.pkl
+  # DINO_TARGET_PSEUDOGT: None
+  # DINO_PSEUDOGT_SWAP: 'half'
+  # DINO_PSEUDOGT_SWAP_ITER: 10
+  DINO_ALIGN_ONLY_UNTIL: -1
+  DINO_ALIGN_EASY_ONLY: True
+  DINO_SAM_MASK: False
+  DET_TARGET: True
+  SEG_SOURCE: False
+  SEG_TARGET: False
+  SEG_INSTANCES_ONLY: False
+  EVAL_SEM_SEG: False
 TEST:
-  # EVAL_PERIOD: 2500
-  EVAL_PERIOD: 10
+  EVAL_PERIOD: 1000
+  # EVAL_PERIOD: 10
 
 
 

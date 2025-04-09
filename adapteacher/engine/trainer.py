@@ -2,6 +2,7 @@
 import os
 import time
 import logging
+logging.basicConfig(level=logging.INFO)
 import torch
 from torch.nn.parallel import DistributedDataParallel
 from fvcore.nn.precise_bn import get_bn_modules
@@ -100,7 +101,7 @@ ACDC_PIX2CLASS = {93:0,97:1,101:2,105:3,109:4,121:5,125:6,128:7}
 
 # Supervised-only Trainer
 class BaselineTrainer(DefaultTrainer):
-    def __init__(self, cfg):
+    def __init__(self, cfg, wandb_run=None):
         """
         Args:
             cfg (CfgNode):
@@ -134,6 +135,12 @@ class BaselineTrainer(DefaultTrainer):
         self.cfg = cfg
 
         self.register_hooks(self.build_hooks())
+
+        if wandb_run is not None:
+            self.log_wandb = True
+            self.wandb_run = wandb_run
+        else:
+            self.log_wandb = False
 
     def resume_or_load(self, resume=True):
         """
@@ -288,6 +295,8 @@ class BaselineTrainer(DefaultTrainer):
 
         def test_and_save_results():
             self._last_eval_results = self.test(self.cfg, self.model)
+            if self.log_wandb:
+                self.wandb_run.log(self._last_eval_results)
             return self._last_eval_results
 
         ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD, test_and_save_results))
@@ -331,7 +340,9 @@ class BaselineTrainer(DefaultTrainer):
             self.storage.put_scalar("total_loss", total_losses_reduced)
             if len(metrics_dict) > 1:
                 self.storage.put_scalars(**metrics_dict)
-
+            
+            if self.log_wandb:
+                self.wandb_run.log(metrics_dict)
 
 # Adaptive Teacher Trainer
 class ATeacherTrainer(DefaultTrainer):
@@ -342,6 +353,8 @@ class ATeacherTrainer(DefaultTrainer):
         Use the custom checkpointer, which loads other backbone models
         with matching heuristics.
         """
+        logger = logging.getLogger(__name__)
+        logger.info("Building Adaptive Teacher Trainer")
         cfg = DefaultTrainer.auto_scale_workers(cfg, comm.get_world_size())
         data_loader = self.build_train_loader(cfg)
 
@@ -369,7 +382,10 @@ class ATeacherTrainer(DefaultTrainer):
             # model.dino_head = DinoV2VitFeatureExtractor(cfg, cnn_dim, model_name='dino_vitb8', normalize_feature=cfg.SEMISUPNET.DINO_LOSS_NORM).eval()
             dino_dim = [*model.dino_head.modules()][-2].normalized_shape[0]
             model.dino_align = DinoAlignHead(cfg, cnn_dim, dino_dim, normalize_feature=model.dino_head.normalize_feature)
-            self._register_input_hook(model, 'proposal_generator')
+            if cfg.SEMISUPNET.DINO_HEAD == 'multi':
+                self._register_input_hook_multi(model, 'proposal_generator')
+            else:
+                self._register_input_hook(model, 'proposal_generator')
             self.dino_loss_weight = cfg.SEMISUPNET.DINO_LOSS_WEIGHT
             self.dino_loss_weight_target = cfg.SEMISUPNET.DINO_LOSS_WEIGHT_TARGET
             model.dino_head = model.dino_head.to((torch.device(cfg.MODEL.DEVICE)))
@@ -382,8 +398,13 @@ class ATeacherTrainer(DefaultTrainer):
         else:
             self.use_dino = False
         
+        self.compare_boxes = cfg.SEMISUPNET.COMPARE_PL_BOXES
+
         if type(cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT) == str:
-            self.use_dino_PL = True
+            if self.compare_boxes:
+                self.use_dino_PL = False
+            else:
+                self.use_dino_PL = True
             file_in = cfg.SEMISUPNET.DINO_TARGET_PSEUDOGT
             with open(file_in, 'rb') as f_in:
                 temp_dict = pickle.load(f_in)
@@ -392,6 +413,7 @@ class ATeacherTrainer(DefaultTrainer):
                 self.dino_pseudogt[img['image_id']] = img
         else:
             self.use_dino_PL = False
+            self.compare_boxes = False
         
         self.align_only_iter = cfg.SEMISUPNET.DINO_ALIGN_ONLY_UNTIL
 
@@ -527,6 +549,16 @@ class ATeacherTrainer(DefaultTrainer):
         else:
             self.log_wandb = False
 
+        self.remove_false_boxes = cfg.SEMISUPNET.REMOVE_FALSE_BOXES
+        self.remove_conf_boxes = cfg.SEMISUPNET.REMOVE_CONF_BOXES
+        self.remove_train_boxes = cfg.SEMISUPNET.REMOVE_TRAIN_BOXES
+
+        if cfg.SEMISUPNET.PSEUDOLABEL_SEMSEG:
+            self.pseudo_semseg = True
+            self.semseg_pseudo_thresh = cfg.SEMISUPNET.PSEUDOLABEL_SEMSEG_THRESH
+        else:
+            self.pseudo_semseg = False
+
         # self.target_layer_name = ['backbone.vgg2.8','backbone.vgg3.8','backbone.vgg4.8','proposal_generator.rpn_head.conv']
         # self.activations_grads = []
         # self._register_grad_hook()
@@ -574,7 +606,18 @@ class ATeacherTrainer(DefaultTrainer):
             if name == target_layer:
                 module.register_forward_hook(self._get_rcnn_input_hook)
         return True
-
+    
+    def _get_rcnn_input_hook_multi(self, module, input, output):
+        self.cnn_feat[self.branch] = {}
+        for feat in ['vgg2', 'vgg3', 'vgg4']:
+            self.cnn_feat[self.branch][feat] = input[1][feat]
+    
+    def _register_input_hook_multi(self, model, target_layer):
+        for (name, module) in model.named_modules():
+            if name == target_layer:
+                module.register_forward_hook(self._get_rcnn_input_hook_multi)
+        return True
+    
     def _postprocess_cam(self, raw_cam, img_width, img_height):
         cam_orig = np.sum(raw_cam, axis=0)  # [H,W]
         cam_orig = np.maximum(cam_orig, 0)  # ReLU
@@ -771,6 +814,8 @@ class ATeacherTrainer(DefaultTrainer):
     def process_pseudo_label(
         self, proposals_rpn_unsup_k, cur_threshold, proposal_type, psedo_label_method="", gt_labels=None,
     ):
+        if proposal_type == "semseg":
+            return self.process_sem_label(proposals_rpn_unsup_k, cur_threshold)
         list_instances = []
         num_proposal_output = 0.0
         for proposal_bbox_inst_raw in proposals_rpn_unsup_k:
@@ -781,6 +826,11 @@ class ATeacherTrainer(DefaultTrainer):
                 else:
                     proposal_bbox_inst, overlap = self.threshold_bbox(
                     proposal_bbox_inst_raw, thres=cur_threshold, proposal_type=proposal_type
+                )
+            elif "FCOS" in self.cfg.MODEL.META_ARCHITECTURE:
+                threshold = proposal_bbox_inst_raw[10].scores
+                proposal_bbox_inst, overlap = self.threshold_bbox(
+                    proposal_bbox_inst_raw, thres=threshold, proposal_type=proposal_type
                 )
             elif psedo_label_method == "thresholding":
                 proposal_bbox_inst, overlap = self.threshold_bbox(
@@ -795,21 +845,37 @@ class ATeacherTrainer(DefaultTrainer):
             self.check_pseudo_labels(proposals_rpn_unsup_k, list_instances, gt_labels)
         return list_instances, num_proposal_output, overlap
 
+    def process_sem_label(self, proposals, thresh):
+        sem_seg = proposals.softmax(dim=1)
+        conf, labels = sem_seg.max(dim=1)
+        unconf_ids = conf < thresh
+        labels[unconf_ids] = 255
+        return labels
+
     def hold_label(self, label_data):
         for label_datum in label_data:
             if "instances" in label_datum.keys():
                 label_datum['instances_gt'] = label_datum['instances']
+            if "sem_seg" in label_datum.keys():
+                label_datum['sem_seg_gt'] = label_datum['sem_seg']
         return label_data
 
     def remove_label(self, label_data):
         for label_datum in label_data:
             if "instances" in label_datum.keys():
                 del label_datum["instances"]
+            if "sem_seg" in label_datum.keys():
+                del label_datum["sem_seg"]
         return label_data
 
     def add_label(self, unlabled_data, label):
         for unlabel_datum, lab_inst in zip(unlabled_data, label):
             unlabel_datum["instances"] = lab_inst
+        return unlabled_data
+
+    def add_seg_label(self, unlabled_data, label):
+        for unlabel_datum, lab_inst in zip(unlabled_data, label):
+            unlabel_datum["sem_seg"] = lab_inst
         return unlabled_data
     
     def get_label(self, label_data):
@@ -956,6 +1022,12 @@ class ATeacherTrainer(DefaultTrainer):
                     param.requires_grad = False
 
         if self.iter % self.cfg.SEMISUPNET.TEACHER_UPDATE_ITER == 0:
+            # if self.iter >= self.cfg.SEMISUPNET.BURN_UP_STEP and "FCOS" in self.cfg.MODEL.META_ARCHITECTURE:
+            #     if self.iter < 25000:
+            #         self._update_teacher_model(keep_rate=self.cfg.SEMISUPNET.EMA_KEEP_RATE)
+            #     elif self.iter == 25000:
+            #         self._update_teacher_model(keep_rate=0.00)
+            # else:
             self._update_teacher_model(
                 keep_rate=self.cfg.SEMISUPNET.EMA_KEEP_RATE)
 
@@ -976,7 +1048,16 @@ class ATeacherTrainer(DefaultTrainer):
                     loss_align['loss_align'] *= 1e-12
                 record_dict.update(loss_align)
 
-            if self.use_dino:
+            if self.use_dino and self.cfg.SEMISUPNET.DINO_HEAD == 'multi':
+                easy_feat = self.model.dino_head(label_data_k)
+                h,w = easy_feat[0].shape[-2:]
+                cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], h, w)
+                dino_loss = 0
+                for ids, feat in enumerate(['vgg2', 'vgg3', 'vgg4']):
+                    dino_feat = torch.cat([easy_feat[ids],easy_feat[ids]])
+                    dino_loss += self.model.dino_align.dino_loss(cnn_feat[ids], dino_feat, gt_data=label_data_k) * self.dino_loss_weight
+                record_dict['loss_dino'] = dino_loss / 3
+            elif self.use_dino:
                 if self.easy_dino_only:
                     easy_feat = self.model.dino_head(label_data_k)
                     dino_feat = torch.cat([easy_feat,easy_feat])
@@ -1034,7 +1115,7 @@ class ATeacherTrainer(DefaultTrainer):
             
 
             #  0. remove unlabeled data labels
-            if self.align_gt_proposals or self.eval_pseudo_labels or (self.use_dino and self.cfg.SEMISUPNET.DINO_TARGET_MASK):
+            if 1:#self.align_gt_proposals or self.eval_pseudo_labels or (self.use_dino and self.cfg.SEMISUPNET.DINO_TARGET_MASK):
                 label_data_q = self.hold_label(label_data_q)
                 label_data_k = self.hold_label(label_data_k)
                 unlabel_data_q = self.hold_label(unlabel_data_q)
@@ -1093,25 +1174,70 @@ class ATeacherTrainer(DefaultTrainer):
                         proposals_rpn_unsup_k,
                         proposals_roih_unsup_k,
                         _,
+                        proposal_semantic_unsup_k,
                     ) = self.model_teacher(unlabel_data_k, branch="unsup_data_weak")
 
                 #  2. Pseudo-labeling
                 joint_proposal_dict = {}
                 joint_proposal_dict["proposals_rpn"] = proposals_rpn_unsup_k
                 #Process pseudo labels and thresholding
-                (
+                if "FCOS" in self.cfg.MODEL.META_ARCHITECTURE:            (
                     pesudo_proposals_rpn_unsup_k,
-                    nun_pseudo_bbox_rpn,
-                    _
-                ) = self.process_pseudo_label(
-                    proposals_rpn_unsup_k, cur_threshold, "rpn", "thresholding"
-                )
+                        num_pseudo_bbox_rpn,
+                        _
+                    ) = self.process_pseudo_label(
+                        proposals_rpn_unsup_k, cur_threshold, "roih", "thresholding"
+                    )
+                else:
+                    (
+                        pesudo_proposals_rpn_unsup_k,
+                        num_pseudo_bbox_rpn,
+                        _
+                    ) = self.process_pseudo_label(
+                        proposals_rpn_unsup_k, cur_threshold, "rpn", "thresholding"
+                    )
                 # analysis_pred, _ = self.probe.compute_num_box(gt_unlabel_k,pesudo_proposals_rpn_unsup_k,'pred',True)
                 # record_dict.update(analysis_pred)
 
+                if self.pseudo_semseg:
+                    pseudo_proposals_semseg_unsup_k = self.process_pseudo_label(
+                        proposal_semantic_unsup_k, self.semseg_pseudo_thresh, "semseg", "thresholding"
+                    )
+                    joint_proposal_dict["proposals_pseudo_seg"] = pseudo_proposals_semseg_unsup_k
+
                 joint_proposal_dict["proposals_pseudo_rpn"] = pesudo_proposals_rpn_unsup_k
                 # Pseudo_labeling for ROI head (bbox location/objectness)
-                pesudo_proposals_roih_unsup_k, _, overlap = self.process_pseudo_label(
+                if self.remove_false_boxes or self.remove_conf_boxes or self.remove_train_boxes or self.compare_boxes:
+                    boxes_gt = [x['instances_gt'].gt_boxes.to(device='cuda') for x in hold_labels]
+                    cls_gt = [x['instances_gt'].gt_classes.to(device='cuda') for x in hold_labels]
+                    # if self.compare_boxes:
+                    #     instances = [self.dino_pseudogt[x['image_id']]['instances_dino'] for x in unlabel_data_q]
+                    #     boxes_dt = [(x['tf_data'].apply_box(y.pred_boxes),y.scores, finey.pred_classes) for x,y in zip(unlabel_data_q,instances)]
+                    
+                    for idx_inst in range(len(boxes_gt)):
+                        if not len(proposals_roih_unsup_k[idx_inst]) or not len(boxes_gt[idx_inst]):
+                            continue
+
+                        box_pl = proposals_roih_unsup_k[idx_inst].pred_boxes
+                        cls_pl = proposals_roih_unsup_k[idx_inst].pred_classes
+                        ious = pairwise_iou(box_pl,boxes_gt[idx_inst])
+                        iou_ids = (ious.max(dim=1)[0] > 0.5)#.detach().cpu()
+                        keep_ids = torch.ones_like(iou_ids)
+                        if self.remove_false_boxes:
+                            keep_ids *= iou_ids
+                        if self.remove_conf_boxes:
+                            cls_pl_true = cls_gt[idx_inst][ious.max(dim=1)[1]]
+                            corr_cls_ids = (cls_pl == cls_pl_true)
+                            keep_ids *= corr_cls_ids
+                        if self.remove_train_boxes:
+                            keep_ids *= (cls_pl != 5)                           
+                        proposals_roih_unsup_k[idx_inst] = proposals_roih_unsup_k[idx_inst][keep_ids]
+
+                    # if self.compare_boxes:
+                        
+                    #     record_dict.update({'num_pseudo_boxes':num_pseudo_bbox_roih})
+
+                pesudo_proposals_roih_unsup_k, num_pseudo_bbox_roih, overlap = self.process_pseudo_label(
                     proposals_roih_unsup_k, cur_threshold, "roih", "thresholding", gt_labels=hold_labels
                 )
                 joint_proposal_dict["proposals_pseudo_roih"] = pesudo_proposals_roih_unsup_k
@@ -1121,16 +1247,28 @@ class ATeacherTrainer(DefaultTrainer):
                 # boxes = self.dino_pseudogt[x['image_id']]['instances_dino'].pred_boxes
                 instances = [self.dino_pseudogt[x['image_id']]['instances_dino'] for x in unlabel_data_q]
                 boxes = [(x['tf_data'].apply_box(y.pred_boxes),y.scores,y.pred_classes) for x,y in zip(unlabel_data_q,instances)]
+                if self.remove_false_boxes:
+                    boxes_gt = [x['instances_gt'].gt_boxes.to(device='cuda') for x in hold_labels]
+                    for idx_inst in range(len(boxes_gt)):
+                        if not len(boxes[idx_inst][1]) or not len(boxes_gt[idx_inst]):
+                            continue
+
+                        box_pl = Boxes(torch.tensor(boxes[idx_inst][0]).to(device=boxes_gt[idx_inst].device))
+                        ious = pairwise_iou(box_pl,boxes_gt[idx_inst])
+                        keep_ids = (ious.max(dim=1)[0] > 0.5)#.detach().cpu()
+                        boxes[idx_inst] = [torch.tensor(x).to(device=boxes_gt[idx_inst].device)[keep_ids] for x in boxes[idx_inst]]
+                        # boxes[idx_inst] = [x[keep_ids] for x in boxes[idx_inst]]
                 dino_pseudo_labels = []
                 for i in range(len(instances)):
                     new_instances = Instances(gt_unlabel_k[i].image_size)
-                    new_instances.gt_boxes = Boxes(torch.tensor(boxes[i][0]))
+                    # new_instances.gt_boxes = Boxes(torch.tensor(boxes[i][0]))
+                    new_instances.gt_boxes = Boxes(boxes[i][0])
                     new_instances.gt_scores = boxes[i][1]
                     new_instances.gt_classes = boxes[i][2]
                     dino_pseudo_labels.append(new_instances)
 
                 joint_proposal_dict = {}
-                pseudo_proposals_dino, _, overlap = self.process_pseudo_label(dino_pseudo_labels, cur_threshold, "dino", "thresholding")
+                pseudo_proposals_dino, num_pseudo_bbox_roih, overlap = self.process_pseudo_label(dino_pseudo_labels, cur_threshold, "dino", "thresholding")
                 joint_proposal_dict["proposals_pseudo_roih"] = pseudo_proposals_dino
                 record_dict.update({'iou_overlap':overlap})
 
@@ -1142,6 +1280,15 @@ class ATeacherTrainer(DefaultTrainer):
                 )
                 unlabel_data_k = self.add_label(
                     unlabel_data_k, joint_proposal_dict["proposals_pseudo_roih"]
+                )
+                record_dict.update({'num_pseudo_boxes':num_pseudo_bbox_roih})
+
+            if self.pseudo_semseg:
+                unlabel_data_q = self.add_seg_label(
+                    unlabel_data_q, joint_proposal_dict["proposals_pseudo_seg"]
+                )
+                unlabel_data_k = self.add_seg_label(
+                    unlabel_data_k, joint_proposal_dict["proposals_pseudo_seg"]
                 )
 
             if self.cfg.INPUT.CLEAN_DETECTIONS:
@@ -1173,7 +1320,16 @@ class ATeacherTrainer(DefaultTrainer):
                     )
                     record_dict.update(record_all_label_data)
 
-            if self.use_dino:
+            if self.use_dino and self.cfg.SEMISUPNET.DINO_HEAD == 'multi':
+                easy_feat = self.model.dino_head(label_data_k)
+                h,w = easy_feat[0].shape[-2:]
+                cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], h, w)
+                dino_loss = 0
+                for ids, feat in enumerate(['vgg2', 'vgg3', 'vgg4']):
+                    dino_feat = torch.cat([easy_feat[ids],easy_feat[ids]])
+                    dino_loss += self.model.dino_align.dino_loss(cnn_feat[ids], dino_feat, gt_data=label_data_k) * self.dino_loss_weight
+                record_dict['loss_dino'] = dino_loss / 3
+            elif self.use_dino:
                 if self.easy_dino_only:
                     easy_feat = self.model.dino_head(label_data_k)
                     dino_feat = torch.cat([easy_feat,easy_feat])
@@ -1203,7 +1359,19 @@ class ATeacherTrainer(DefaultTrainer):
                 # all_unlabel_data, branch="supervised_target", use_gt_only=self.use_gt_proposals_only
                 all_unlabel_data, branch="supervised_target", #use_gt_only=self.use_gt_proposals_only
             )
-            if self.use_dino:
+            if self.use_dino and self.cfg.SEMISUPNET.DINO_HEAD == 'multi':
+                easy_feat = self.model.dino_head(unlabel_data_k)
+                h,w = easy_feat[0].shape[-2:]
+                cnn_feat = self.model.dino_align(self.cnn_feat[self.branch], h, w)
+                dino_loss_pseudo = 0
+                for ids, feat in enumerate(['vgg2', 'vgg3', 'vgg4']):
+                    if len(all_unlabel_data) > len(unlabel_data_k):
+                        dino_feat = torch.cat([easy_feat[ids],easy_feat[ids]])
+                    else:
+                        dino_feat = easy_feat[ids]
+                    dino_loss_pseudo += self.model.dino_align.dino_loss(cnn_feat[ids], dino_feat, gt_data=all_unlabel_data) * self.dino_loss_weight_target
+                record_dict['loss_dino_pseud'] = dino_loss / 3
+            elif self.use_dino:
                 if self.easy_dino_only and len(all_unlabel_data) > len(unlabel_data_k):
                     easy_feat = self.model.dino_head(unlabel_data_k)
                     dino_feat = torch.cat([easy_feat,easy_feat])
@@ -1387,7 +1555,7 @@ class ATeacherTrainer(DefaultTrainer):
     @classmethod
     def build_test_loader(cls, cfg, dataset_name):
         if cfg.SEMISUPNET.EVAL_SEM_SEG:
-            mapper = DatasetMapper_instance_segm(cfg,True)
+            mapper = DatasetMapper_instance_segm(cfg,False)
         else:
             mapper = None
         return build_detection_test_loader(cfg, dataset_name, mapper=mapper)
@@ -3584,14 +3752,22 @@ def temp123():
     scale = (1330+742*2)/(1080*2+1920)
 
     names = ['person','rider','car', 'truck', 'bus', 'train', 'mcycle','bcycle']
-    img_ = tens2img(unlabel_data_q[0]['image'])
-    boxes1 = unlabel_data_q[0]['instances_gt'].gt_boxes.tensor.numpy()
-    labels1 = unlabel_data_q[0]['instances_gt'].gt_classes.tolist()
-    tfs = unlabel_data_q[0]['tf_data']
-    ids = torch.where(self.dino_pseudogt[unlabel_data_q[0]['image_id']]['instances_dino'].scores > 0.75)[0]
-    boxes2_ = self.dino_pseudogt[unlabel_data_q[0]['image_id']]['instances_dino'][ids].pred_boxes.numpy()
+    img_ = tens2img(unlabel_data_k[0]['image'])
+    boxes1 = unlabel_data_k[0]['instances_gt'].gt_boxes.tensor.numpy()
+    labels1 = unlabel_data_k[0]['instances_gt'].gt_classes.tolist()
+
+    boxes2_ = proposals_roih_unsup_k[0].pred_boxes.tensor.cpu().numpy()
+    tfs = unlabel_data_k[0]['tf_data']
     boxes2 = tfs.apply_box(boxes2_)
-    labels2 = self.dino_pseudogt[unlabel_data_q[0]['image_id']]['instances_dino'][ids].pred_classes.tolist()
+    labels2 = proposals_roih_unsup_k[0].pred_classes.tolist()   
+    boxes2 = boxes2[:10]
+    labels2 = labels2[:10]
+
+    # tfs = unlabel_data_q[0]['tf_data']
+    # ids = torch.where(self.dino_pseudogt[unlabel_data_q[0]['image_id']]['instances_dino'].scores > 0.75)[0]
+    # boxes2_ = self.dino_pseudogt[unlabel_data_q[0]['image_id']]['instances_dino'][ids].pred_boxes.numpy()
+    # boxes2 = tfs.apply_box(boxes2_)
+    # labels2 = self.dino_pseudogt[unlabel_data_q[0]['image_id']]['instances_dino'][ids].pred_classes.tolist()
 
     # img_ = inputs[0]['image'].transpose(0,1).transpose(1,2)
     # temp1 = inputs[0]['instances'].gt_boxes
@@ -3606,9 +3782,10 @@ def temp123():
     test_v.overlay_instances(boxes=boxes2, labels=labels2)
     img2 = test_v.get_output().get_image()
 
-    plt.figure();plt.imshow(img1)
-    plt.figure();plt.imshow(img2)
-    plt.show()
+    plt.figure(figsize=(8,6));plt.imshow(img1);plt.savefig('img1.png')
+    plt.figure(figsize=(8,6));plt.imshow(img2);plt.savefig('img2.png')
+    plt.close("all")
+    # plt.show()
 
 def tens2img(x):
     return x.transpose(0,1).transpose(1,2).cpu().numpy()[:,:,[2,1,0]]
@@ -3831,6 +4008,8 @@ def inference_on_dataset(
         if get_outs:
             output_list = []
         for idx, inputs in enumerate(data_loader):
+            if inputs[0]['file_name'] == 'datasets/cityscapes/leftImg8bit/val/frankfurt/frankfurt_000001_068682_leftImg8bit.png':
+                a=1
             total_data_time += time.perf_counter() - start_data_time
             if idx == num_warmup:
                 start_time = time.perf_counter()

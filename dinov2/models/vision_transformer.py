@@ -65,6 +65,10 @@ class DinoVisionTransformer(nn.Module):
         num_register_tokens=0,
         interpolate_antialias=False,
         interpolate_offset=0.1,
+        num_finetune_tokens=0,
+        len_finetune_tokens=0,
+        share_finetune_tokens=False,
+        finetune_dropout=0.1,
     ):
         """
         Args:
@@ -112,6 +116,24 @@ class DinoVisionTransformer(nn.Module):
         self.register_tokens = (
             nn.Parameter(torch.zeros(1, num_register_tokens, embed_dim)) if num_register_tokens else None
         )
+        assert num_finetune_tokens >= 0
+        self.num_finetune_tokens = num_finetune_tokens
+        if len_finetune_tokens < 0:
+            len_finetune_tokens = depth
+        if len_finetune_tokens:
+            print('using finetuning')
+        self.finetune_depth = len_finetune_tokens
+        self.embed_dim = embed_dim
+        self.share_finetune_tokens = share_finetune_tokens
+        self.finetune_dropout = torch.nn.Dropout(p=finetune_dropout)
+        if share_finetune_tokens:
+            self.finetune_tokens = (
+                nn.Parameter(torch.zeros(1, num_finetune_tokens, embed_dim)) if (num_finetune_tokens and len_finetune_tokens) else None
+            )
+        else:
+            self.finetune_tokens = (
+                nn.Parameter(torch.zeros(len_finetune_tokens, num_finetune_tokens, embed_dim)) if (num_finetune_tokens and len_finetune_tokens) else None
+            )
 
         if drop_path_uniform is True:
             dpr = [drop_path_rate] * depth
@@ -174,6 +196,11 @@ class DinoVisionTransformer(nn.Module):
         nn.init.normal_(self.cls_token, std=1e-6)
         if self.register_tokens is not None:
             nn.init.normal_(self.register_tokens, std=1e-6)
+        if self.finetune_tokens is not None:
+            val = math.sqrt(6. / float(3 * self.patch_size**2 + self.embed_dim))  # noqa
+            # xavier_uniform initialization
+            nn.init.uniform_(self.finetune_tokens.data, -val, val)
+
         named_apply(init_weights_vit_timm, self)
 
     def interpolate_pos_encoding(self, x, w, h):
@@ -228,23 +255,41 @@ class DinoVisionTransformer(nn.Module):
                 ),
                 dim=1,
             )
+        if self.finetune_tokens is not None:
+            finetune_tokens = self.finetune_dropout(self.finetune_tokens[0,:,:].expand(x.shape[0], -1, -1))
+            x = torch.cat(
+                (
+                    x[:, :1],
+                    finetune_tokens,
+                    x[:, 1:],
+                ),
+                dim=1,
+            )
 
         return x
 
     def forward_features_list(self, x_list, masks_list):
         x = [self.prepare_tokens_with_masks(x, masks) for x, masks in zip(x_list, masks_list)]
+        k=0
         for blk in self.blocks:
             x = blk(x)
+            if self.num_finetune_tokens and k < self.finetune_depth-1:
+                if not self.share_finetune_tokens:
+                    k += 1
+                finetune_tokens = self.finetune_dropout(self.finetune_tokens[k,:,:].expand(x.shape[0], -1, -1))
+                x[:,1:self.num_finetune_tokens+1] = finetune_tokens
 
         all_x = x
         output = []
         for x, masks in zip(all_x, masks_list):
             x_norm = self.norm(x)
+            n_total = self.num_register_tokens + self.num_finetune_tokens
             output.append(
                 {
                     "x_norm_clstoken": x_norm[:, 0],
-                    "x_norm_regtokens": x_norm[:, 1 : self.num_register_tokens + 1],
-                    "x_norm_patchtokens": x_norm[:, self.num_register_tokens + 1 :],
+                    "x_norm_finetokens": x_norm[:, 1 : self.num_finetune_tokens + 1],
+                    "x_norm_regtokens": x_norm[:, self.num_finetune_tokens + 1 : n_total + 1],
+                    "x_norm_patchtokens": x_norm[:, n_total + 1 :],
                     "x_prenorm": x,
                     "masks": masks,
                 }
@@ -257,13 +302,21 @@ class DinoVisionTransformer(nn.Module):
 
         x = self.prepare_tokens_with_masks(x, masks)
 
+        k=0
         for blk in self.blocks:
             x = blk(x)
+            if self.num_finetune_tokens and k < self.finetune_depth-1:
+                if not self.share_finetune_tokens:
+                    k += 1
+                finetune_tokens = self.finetune_dropout(self.finetune_tokens[k,:,:].expand(x.shape[0], -1, -1))
+                x[:,1:self.num_finetune_tokens+1] = finetune_tokens
 
         x_norm = self.norm(x)
+        n_total = self.num_register_tokens + self.num_finetune_tokens
         return {
             "x_norm_clstoken": x_norm[:, 0],
-            "x_norm_regtokens": x_norm[:, 1 : self.num_register_tokens + 1],
+            "x_norm_finetokens": x_norm[:, 1 : self.num_finetune_tokens + 1],
+            "x_norm_regtokens": x_norm[:, self.num_finetune_tokens + 1 : n_total + 1],
             "x_norm_patchtokens": x_norm[:, self.num_register_tokens + 1 :],
             "x_prenorm": x,
             "masks": masks,
@@ -274,8 +327,14 @@ class DinoVisionTransformer(nn.Module):
         # If n is an int, take the n last blocks. If it's a list, take them
         output, total_block_len = [], len(self.blocks)
         blocks_to_take = range(total_block_len - n, total_block_len) if isinstance(n, int) else n
+        k=0
         for i, blk in enumerate(self.blocks):
             x = blk(x)
+            if self.num_finetune_tokens and k < self.finetune_depth-1:
+                if not self.share_finetune_tokens:
+                    k += 1
+                finetune_tokens = self.finetune_dropout(self.finetune_tokens[k,:,:].expand(x.shape[0], -1, -1))
+                x[:,1:self.num_finetune_tokens+1] = finetune_tokens
             if i in blocks_to_take:
                 output.append(x)
         assert len(output) == len(blocks_to_take), f"only {len(output)} / {len(blocks_to_take)} blocks found"
@@ -310,7 +369,8 @@ class DinoVisionTransformer(nn.Module):
         if norm:
             outputs = [self.norm(out) for out in outputs]
         class_tokens = [out[:, 0] for out in outputs]
-        outputs = [out[:, 1 + self.num_register_tokens :] for out in outputs]
+        num_other_tokens = 1 + self.num_register_tokens + self.num_finetune_tokens
+        outputs = [out[:, num_other_tokens :] for out in outputs]
         if reshape:
             B, _, w, h = x.shape
             outputs = [

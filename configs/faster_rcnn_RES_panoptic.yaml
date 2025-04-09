@@ -84,8 +84,9 @@ MODEL:
     SCALE_EXPO_IOU: 1.0
     GT_INJECT_COV_WEIGHT: 1.0
   # WEIGHTS: "/media/marc/data_checks1/R-101.pkl"
-  WEIGHTS: "/media/marc/data_checks1/R-50.pkl"
+  # WEIGHTS: "/media/marc/data_checks1/R-50.pkl"
   # WEIGHTS: "/media/marc/data_checks1/results_dino/cityfog/bl20k/model_0019999.pth"
+  WEIGHTS: "/home/mlavoie/scripts/adaptive_teacher/datasets/R-50.pkl"
 SOLVER:
   LR_SCHEDULER_NAME: "WarmupTwoStageMultiStepLR"
   STEPS: (60000, 80000, 90000, 360000)
@@ -104,8 +105,8 @@ SOLVER:
     # CLIP_VALUE: 0.5
 DATALOADER:
   SUP_PERCENT: 100.0
-  SAMPLER_TRAIN: "RepeatFactorTrainingSampler"
-  REPEAT_THRESHOLD: 0.1
+  # SAMPLER_TRAIN: "RepeatFactorTrainingSampler"
+  # REPEAT_THRESHOLD: 0.1
 DATASETS:
   CROSS_DATASET: True
   TRAIN_LABEL: ("cityscapes_fine_instance_seg_train",)
@@ -124,8 +125,8 @@ SEMISUPNET:
   BBOX_THRESHOLD: 0.8
   # BBOX_THRESHOLD: 0.15
   TEACHER_UPDATE_ITER: 1
-  BURN_UP_STEP: 20000
-  # BURN_UP_STEP: 2
+  # BURN_UP_STEP: 20000
+  BURN_UP_STEP: 2
   EMA_KEEP_RATE: 0.9996
   # EMA_KEEP_RATE: 0.999
   UNSUP_LOSS_WEIGHT: 0.0
@@ -151,7 +152,7 @@ SEMISUPNET:
   ALIGN_MAX_BATCH: 200
   ALIGN_SCALE_COUNT: False
   ALIGN_BASE_COUNT: 200
-  USE_GT_PROPOSALS: True
+  USE_GT_PROPOSALS: False
   USE_GT_PROPOSALS_ONLY: False
   ALIGN_USE_NEGATIVES: True
   ALIGN_GT_PROPOSALS: False
@@ -191,8 +192,10 @@ SEMISUPNET:
   DET_TARGET: True
   SEG_SOURCE: True
   SEG_TARGET: True
-  SEG_INSTANCES_ONLY: True
+  SEG_INSTANCES_ONLY: False
   EVAL_SEM_SEG: True
+  PSEUDOLABEL_SEMSEG: False
+  PSEUDOLABEL_SEMSEG_THRESH: 0.95
 TEST:
   # EVAL_PERIOD: 1000
   EVAL_PERIOD: 10

@@ -64,8 +64,8 @@ def setup(args):
         # cfg.TEST.EVAL_PERIOD = 20
         # cfg.DATASETS.TEST = ("cityscapes_val","cityscapes_foggy_val","ACDC_val_rain","ACDC_val_fog")
         # cfg.DATASETS.TEST = ("cityscapes_val",)
-        # cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_rain")
-        cfg.DATASETS.TEST = ("BDD_day_train",)
+        # cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_fog")
+        # cfg.DATASETS.TEST = ("BDD_day_train",)
         # cfg.DATASETS.TEST = ("BDD_nightclear_train",)
     else:
         cfg.SEMISUPNET.set_new_allowed(True)
@@ -94,6 +94,10 @@ def setup(args):
         cfg.DATASETS.TEST = ("cityscapes_val","BDD_day_val")
     if args.small_anchors:
         cfg.MODEL.ANCHOR_GENERATOR.SIZES = [[8, 16, 32, 64, 128, 256, 512]]
+    if args.run_cityfog:
+        cfg.DATASETS.TRAIN_LABEL = ("cityscapes_fine_instance_seg_train",)
+        cfg.DATASETS.TRAIN_UNLABEL = ("cityscapes_foggy_train",)
+        cfg.DATASETS.TEST = ("cityscapes_val","cityscapes_foggy_val")
     # cfg.DATASETS.TRAIN_UNLABEL = ("cityscapes_foggy_train")
     # cfg.DATASETS.TEST = ("cityscapes_val","ACDC_val_fog","ACDC_val_night","ACDC_val_rain","ACDC_val_snow")
     # cfg.DATASETS.TEST = ("cityscapes_val","cityscapes_foggy_val","ACDC_train_fog","ACDC_train_night","ACDC_train_rain","ACDC_train_snow")
@@ -117,7 +121,7 @@ def setup(args):
         if cfg.INPUT.MAX_SIZE_TEST % scale:
             cfg.INPUT.MAX_SIZE_TEST =  floor(cfg.INPUT.MAX_SIZE_TEST / scale)*scale
     cfg.freeze()
-    default_setup(cfg, args, save_config=False)
+    default_setup(cfg, args, write_cfg=True)
     return cfg
 
 def scale_configs(cfg):
@@ -225,6 +229,7 @@ if __name__ == "__main__":
     parser.add_argument("--acdc-type", default=None, help="acdc run type")
     parser.add_argument("--acdc-only", default=False, help="train on acdc only")
     parser.add_argument("--bdd-only", default=False, help="train on bdd only")
+    parser.add_argument("--run-cityfog", default=False, help="train and test on Foggy Cityscapes")
     parser.add_argument("--use-city-dino", default=False, help="train city2bdd")
     parser.add_argument("--use-wandb", default=False, help="use wandb to log run")
     parser.add_argument("--small-anchors", default=False, help="add smaller anchors for long range")
@@ -232,7 +237,9 @@ if __name__ == "__main__":
     url_parts = args.dist_url.rsplit(':',1)
     url_parts[1] = str(randint(0,1000) + int(url_parts[1]))
     args.dist_url = (':').join(url_parts)
-    args.use_wandb=False
+    # args.run_cityfog = bool(args.run_cityfog)
+
+    # args.use_wandb=False
 
     #   --num-gpus 8
     #   --config configs/faster_rcnn_VGG_cross_city.yaml\
@@ -250,9 +257,12 @@ if __name__ == "__main__":
     # args.config_file = './configs/faster_rcnn_VGG_cross_city_test_small.yaml'
     # args.config_file = './configs/faster_rcnn_DINO_bbone.yaml'
     # args.config_file = './configs/faster_rcnn_DINO_test.yaml'
-    args.config_file = './configs/faster_rcnn_RES_panoptic.yaml'
-    args.resume = False
-    # args.resume = True
+    # args.config_file = './configs/faster_rcnn_RES_panoptic.yaml'
+    # args.config_file = './configs/faster_rcnn_RES_maskFPN.yaml'
+    # args.config_file = './configs/fpn_vgg.yaml'
+    # args.config_file = './configs/fpn_dinov2_vit.yaml'
+    # args.resume = False
+    args.resume = True
 
     # args.OUTPUT_DIR = './output/temp1'
 
@@ -308,6 +318,13 @@ if __name__ == "__main__":
     # args.output_dir = './output/dino/dino_twin_dinov2_nom_vitb_lrbbone001_rareclass_v1/'
     # args.output_dir = './output/dino/dino_twin_dinovbbone_bddweather_vitl_v1/'
     # args.output_dir = './output/dino/dino_twin_dinovbbone_vitlreg_v1/'
+    # args.output_dir = './output/seg/seg_citynom_segw050_fullsem_v1/'
+    # args.output_dir = './output/tmp/dino_twin_vgg_fcos_AT_thresh080_newscore_v1/'
+    # args.output_dir = './output/dino/dino_vgg_clean_GPL_080_v1/'
+    # args.output_dir = './output/dino/dino_vgg_clean_MTPL_060_v1/'
+    # args.output_dir = './output/tmp/dino_twin_vgg_bdd_bl_v2/'
+    # args.output_dir = './output/dino/dino_twin_dinovbbone_vitb16_bdd_v1/'
+    # args.output_dir = './output/dino/dino_twin_dinovbbone_vitb16_fpn_bdd_v1/'
 
 
     # args.use_old_cfg = True
@@ -322,3 +339,10 @@ if __name__ == "__main__":
         dist_url=args.dist_url,
         args=(args,),
     )
+
+# file_in1 = '/home/mlavoie/scripts/adaptive_teacher/output/dino/dino_twin_vits_bdd_dinogt_align_v1/model_final.pth'
+# file_in2 = '/home/mlavoie/scripts/adaptive_teacher/output/dino/dino_twin_vits_bdd_dinogt_align_v1/model_0019999.pth'
+# file_in3 = '/home/mlavoie/scripts/adaptive_teacher/output/dino/dino_twin_dinov2_nom_vits_v2/model_0019999.pth'
+# file_in4 = '/home/mlavoie/scripts/adaptive_teacher/adapteacher/engine/dino_weights/dinov2_vits14_pretrain.pth'
+
+# model2 = torch.load(file_in2)

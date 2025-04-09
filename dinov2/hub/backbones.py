@@ -58,6 +58,7 @@ def _make_dinov2_model(
         state_dict = torch.hub.load_state_dict_from_url(url, map_location="cpu")
         model.load_state_dict(state_dict, strict=True)
 
+    print(model)
     return model
 
 

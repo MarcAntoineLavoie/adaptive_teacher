@@ -148,3 +148,30 @@ def build_vgg_fpn_backbone(cfg, _):
     # return backbone
 
     return backbone
+
+
+@BACKBONE_REGISTRY.register() #already register in baseline model
+def build_retinanet_vgg_fpn_backbone(cfg, _):
+    # backbone = FPN(
+    #     bottom_up=build_vgg_backbone(cfg),
+    #     in_features=cfg.MODEL.FPN.IN_FEATURES,
+    #     out_channels=cfg.MODEL.FPN.OUT_CHANNELS,
+    #     norm=cfg.MODEL.FPN.NORM,
+    #     top_block=LastLevelMaxPool(),
+    # )
+
+    bottom_up = vgg_backbone(cfg)
+    in_features = cfg.MODEL.FPN.IN_FEATURES
+    out_channels = cfg.MODEL.FPN.OUT_CHANNELS
+    in_channels_p6p7 = bottom_up.output_shape()["vgg4"].channels
+    backbone = FPN(
+        bottom_up=bottom_up,
+        in_features=in_features,
+        out_channels=out_channels,
+        norm=cfg.MODEL.FPN.NORM,
+        top_block=LastLevelP6P7(in_channels_p6p7, out_channels, in_feature="vgg4"),
+        fuse_type=cfg.MODEL.FPN.FUSE_TYPE,
+    )
+    # return backbone
+
+    return backbone

@@ -6,6 +6,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from detectron2.modeling.meta_arch.build import META_ARCH_REGISTRY
 from detectron2.modeling.meta_arch.rcnn import GeneralizedRCNN
+from detectron2.modeling.meta_arch.fcos import FCOS
 from detectron2.config import configurable
 # from detectron2.modeling.meta_arch.build import META_ARCH_REGISTRY
 # from detectron2.modeling.meta_arch.rcnn import GeneralizedRCNN
@@ -348,7 +349,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             losses.update(detector_losses)
             losses.update(proposal_losses)
             losses["loss_D_img_s"] = loss_D_img_s*0.001
-            print([x.item() for x in proposal_losses.values()])
+            # print([x.item() for x in proposal_losses.values()])
             return losses, [], [], None
 
         elif branch == "supervised_target":
@@ -411,7 +412,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             #     if storage.iter % self.vis_period == 0:
             #         self.visualize_training(batched_inputs, proposals_rpn, branch)
 
-            return {}, proposals_rpn, proposals_roih, ROI_predictions
+            return {}, proposals_rpn, proposals_roih, ROI_predictions, None
         elif branch == "unsup_data_strong":
             raise NotImplementedError()
         elif branch == "val_loss":
@@ -1083,7 +1084,10 @@ class DINOgenRCNNN(GeneralizedRCNN):
 
     @classmethod
     def from_config(cls, cfg):
-        backbone = DinoV2VitFeatureExtractor_wrapper(cfg)
+        if cfg.SEMISUPNET.USE_VITDET:
+            backbone = vitdet_wrapper(cfg)
+        else:
+            backbone = DinoV2VitFeatureExtractor_wrapper(cfg)
         return {
             "backbone": backbone,
             "proposal_generator": build_proposal_generator(cfg, backbone.output_shape()),
@@ -1288,7 +1292,7 @@ class DINOgenRCNNN(GeneralizedRCNN):
             #     if storage.iter % self.vis_period == 0:
             #         self.visualize_training(batched_inputs, proposals_rpn, branch)
 
-            return {}, proposals_rpn, proposals_roih, ROI_predictions
+            return {}, proposals_rpn, proposals_roih, ROI_predictions, None
         elif branch == "unsup_data_strong":
             raise NotImplementedError()
         elif branch == "val_loss":
@@ -1394,23 +1398,42 @@ class DINOgenRCNNN(GeneralizedRCNN):
             return GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
         return results
     
+from math import floor
 class DinoV2VitFeatureExtractor_wrapper(DinoV2VitFeatureExtractor):
     def __init__(self, cfg, output_layer='dino_out'):
         if cfg.SEMISUPNET.USE_DINO and cfg.SEMISUPNET.DINO_LR_SCALE:
             freeze = False
+            print('bbone not frozen')
         else:
             freeze = True
-        super(DinoV2VitFeatureExtractor_wrapper, self).__init__(cfg, model_name=cfg.SEMISUPNET.DINO_MODEL, normalize_feature=False, freeze=freeze)
-        self.output_layer = output_layer
-        self._out_feature_channels = {self.output_layer:self.encoder.blocks[-1].norm2.bias.shape[0]}
-        self._out_feature_strides = {self.output_layer:self.patch_size}
+            print('bbone frozen')
+        super(DinoV2VitFeatureExtractor_wrapper, self).__init__(cfg, model_name=cfg.SEMISUPNET.DINO_BBONE_MODEL, normalize_feature=False, freeze=freeze)
+        if cfg.SEMISUPNET.USE_MULTISCALE:
+            self.output_layers = [3,5,7,11]
+            self.output_scales = [4.0,2.0,1.0,0.5]
+            strides = [floor(self.patch_size/x) for x in self.output_scales]
+            # strides.reverse()
+            # self.output_layer = ['p1','p2','p3','p4','p5']
+            # strides.append(strides[-1]*2)
+            # self.last_layer_pool = LastLevelMaxPool(self.output_layer[-2])
+            self.output_layer = ['p1','p2','p3','p4']
+            self._out_feature_channels = {x:self.encoder.blocks[-1].norm2.bias.shape[0] for x in self.output_layer}
+            self._out_feature_strides = {x:y for x,y in zip(self.output_layer,strides)}
+            self.forward = self.forward_multi
+        else:
+            self.output_layer = output_layer
+            self._out_feature_channels = {self.output_layer:self.encoder.blocks[-1].norm2.bias.shape[0]}
+            self._out_feature_strides = {self.output_layer:self.patch_size}
         self.size_divisibility = 0
         self.padding_constraints = {}
         self.encoder.mask_token.requires_grad = False
     
     def output_shape(self):
-        output = ShapeSpec(channels = self._out_feature_channels[self.output_layer], stride=self._out_feature_strides[self.output_layer])
-        return {self.output_layer: output}
+        if type(self.output_layer) == list:
+            return {x: ShapeSpec(channels = self._out_feature_channels[x], stride=self._out_feature_strides[x]) for x in self.output_layer}
+        else:
+            output = ShapeSpec(channels = self._out_feature_channels[self.output_layer], stride=self._out_feature_strides[self.output_layer])
+            return {self.output_layer: output}
 
     def preprocess_image_train(self, batched_inputs: List[Dict[str, torch.Tensor]]):
         """
@@ -1445,6 +1468,153 @@ class DinoV2VitFeatureExtractor_wrapper(DinoV2VitFeatureExtractor):
         x_grid_features = x.contiguous().transpose(1, 2).contiguous().view(batch_size, self.embed_dim, f_height, f_width)
 
         return {self.output_layer: x_grid_features}
+
+    def forward_multi(self, x):
+        x = x[:,[2,1,0],:,:]
+        batch_size, _, height, width = x.size()
+        # check image dims divisible by patch_size
+        assert (height % self.patch_size) == 0
+        assert (width % self.patch_size) == 0
+        f_height = height // self.patch_size
+        f_width = width // self.patch_size
+
+        x = self.encoder.get_intermediate_layers(x,self.output_layers) # batch_size, num_patches, self.embed_dim
+        # if "v2" not in self.model_name:
+        #     x = x[:,1:,:] # remove class token
+
+        x_grid_features = []
+        # for feats in x:
+        #     if self.normalize_feature:
+        #         feats = F.normalize(feats, p=2, dim=2)
+
+        #     feats_grid_features = feats.contiguous().transpose(1, 2).contiguous().view(batch_size, self.embed_dim, f_height, f_width)
+        
+        for i in range(len(x)):
+            feats_grid_features = x[-1].contiguous().transpose(1, 2).contiguous().view(batch_size, self.embed_dim, f_height, f_width)
+            x_grid_features.append(feats_grid_features)
+
+        if self.output_scales is not None:
+            x_grid_features = [F.interpolate(feat, scale_factor=scale, mode='bilinear', align_corners=False) for feat, scale in zip(x_grid_features, self.output_scales)]
+        # x_grid_features.append(self.last_layer_pool(x_grid_features[-1])[0])
+
+        return {x:y for x,y in zip(self.output_layer,x_grid_features)}
+
+
+class LastLevelMaxPool(nn.Module):
+    """
+    This module is used in the original FPN to generate a downsampled
+    P6 feature from P5.
+    """
+
+    def __init__(self, in_feature):
+        super().__init__()
+        self.num_levels = 1
+        self.in_feature = in_feature
+
+    def forward(self, x):
+        return [F.max_pool2d(x, kernel_size=1, stride=2, padding=0)]
+
+from detectron2.modeling.backbone.fpn import Backbone
+import math
+class vitdet_wrapper(Backbone):
+    def __init__(self, cfg, in_feature='dino_out', out_channels=256, scale_factors=[4.0, 2.0, 1.0, 0.5], top_block=LastLevelMaxPool(in_feature='p4'), norm="LN"):
+        super(Backbone, self).__init__()
+        backbone = DinoV2VitFeatureExtractor_wrapper(cfg, output_layer=in_feature)
+
+        self.scale_factors = scale_factors
+        input_shapes = backbone.output_shape()
+        strides = [int(input_shapes[in_feature].stride / scale) for scale in scale_factors]
+
+        dim = input_shapes[in_feature].channels
+        self.stages = []
+        use_bias = norm == ""
+        for idx, scale in enumerate(scale_factors):
+            out_dim = dim
+            if scale == 4.0:
+                layers = [
+                    nn.ConvTranspose2d(dim, dim // 2, kernel_size=2, stride=2),
+                    get_norm(norm, dim // 2),
+                    nn.GELU(),
+                    nn.ConvTranspose2d(dim // 2, dim // 4, kernel_size=2, stride=2),
+                ]
+                out_dim = dim // 4
+            elif scale == 2.0:
+                layers = [nn.ConvTranspose2d(dim, dim // 2, kernel_size=2, stride=2)]
+                out_dim = dim // 2
+            elif scale == 1.0:
+                layers = []
+            elif scale == 0.5:
+                layers = [nn.MaxPool2d(kernel_size=2, stride=2)]
+            else:
+                raise NotImplementedError(f"scale_factor={scale} is not supported yet.")
+
+            layers.extend(
+                [
+                    Conv2d(
+                        out_dim,
+                        out_channels,
+                        kernel_size=1,
+                        bias=use_bias,
+                        norm=get_norm(norm, out_channels),
+                    ),
+                    Conv2d(
+                        out_channels,
+                        out_channels,
+                        kernel_size=3,
+                        padding=1,
+                        bias=use_bias,
+                        norm=get_norm(norm, out_channels),
+                    ),
+                ]
+            )
+            layers = nn.Sequential(*layers)
+
+            stage = int(math.log2(strides[idx]))
+            self.add_module(f"simfp_{stage}", layers)
+            self.stages.append(layers)
+
+        self.net = backbone
+        self.in_feature = in_feature
+        self.top_block = top_block
+        # Return feature names are "p<stage>", like ["p2", "p3", ..., "p6"]
+        self._out_feature_strides = {"p{}".format(int(math.log2(s))): s for s in strides}
+        # top block output feature maps.
+        if self.top_block is not None:
+            for s in range(stage, stage + self.top_block.num_levels):
+                self._out_feature_strides["p{}".format(s + 1)] = 2 ** (s + 1)
+
+        self._out_features = list(self._out_feature_strides.keys())
+        self._out_feature_channels = {k: out_channels for k in self._out_features}
+        self._size_divisibility = strides[-1]
+        # self._square_pad = square_pad
+
+    def forward(self, x):
+        """
+        Args:
+            x: Tensor of shape (N,C,H,W). H, W must be a multiple of ``self.size_divisibility``.
+
+        Returns:
+            dict[str->Tensor]:
+                mapping from feature map name to pyramid feature map tensor
+                in high to low resolution order. Returned feature names follow the FPN
+                convention: "p<stage>", where stage has stride = 2 ** stage e.g.,
+                ["p2", "p3", ..., "p6"].
+        """
+        bottom_up_features = self.net(x)
+        features = bottom_up_features[self.in_feature]
+        results = []
+
+        for stage in self.stages:
+            results.append(stage(features))
+
+        if self.top_block is not None:
+            if self.top_block.in_feature in bottom_up_features:
+                top_block_in_feature = bottom_up_features[self.top_block.in_feature]
+            else:
+                top_block_in_feature = results[self._out_features.index(self.top_block.in_feature)]
+            results.extend(self.top_block(top_block_in_feature))
+        assert len(self._out_features) == len(results)
+        return {f: res for f, res in zip(self._out_features, results)}
 
 class lazy_model_wrapper(nn.Module):
     def __init__(self, cfg, freeze_bbone=False):
@@ -1491,7 +1661,7 @@ class lazy_model_wrapper(nn.Module):
 
         else:
             loss_dict = self.model(batched_inputs)
-            return loss_dict, [], [], None
+            return loss_dict, [], [], None, None
 
 
         # images = self.preprocess_image(batched_inputs)
@@ -2009,6 +2179,7 @@ class DAobjTwoStagePseudoLabPanopticFPN(GeneralizedRCNN):
         train_det_target: bool = True,
         train_segm_source: bool = False,
         train_segm_target: bool = False,
+        infer_sem_seg: bool = False,
     ):
         """
         Args:
@@ -2033,6 +2204,7 @@ class DAobjTwoStagePseudoLabPanopticFPN(GeneralizedRCNN):
         self.train_det_target = train_det_target
         self.train_segm_source = train_segm_source
         self.train_segm_target = train_segm_target
+        self.infer_sem_seg = infer_sem_seg
 
         self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type])
 
@@ -2074,7 +2246,8 @@ class DAobjTwoStagePseudoLabPanopticFPN(GeneralizedRCNN):
             "combine_instances_score_thresh": cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH,  # noqa
             "train_det_target": cfg.SEMISUPNET.DET_TARGET,
             "train_segm_source": cfg.SEMISUPNET.SEG_SOURCE,
-            "train_segm_target": cfg.SEMISUPNET.SEG_TARGET
+            "train_segm_target": cfg.SEMISUPNET.SEG_TARGET,
+            "infer_sem_seg": cfg.SEMISUPNET.EVAL_SEM_SEG,
         }
 
     def preprocess_image_train(self, batched_inputs: List[Dict[str, torch.Tensor]]):
@@ -2200,7 +2373,7 @@ class DAobjTwoStagePseudoLabPanopticFPN(GeneralizedRCNN):
             if self.train_segm_source:
                 losses.update(sem_seg_losses)
             losses["loss_D_img_s"] = loss_D_img_s*0.
-            print([x.item() for x in proposal_losses.values()])
+            # print([x.item() for x in proposal_losses.values()])
             return losses, [], [], None
 
         elif branch == "supervised_target":
@@ -2264,7 +2437,7 @@ class DAobjTwoStagePseudoLabPanopticFPN(GeneralizedRCNN):
             )
 
             if self.train_segm_target:
-                proposals_semantic, _ = self.sem_seg_head(images, inference=True)
+                proposals_semantic, _ = self.sem_seg_head(features, inference=True)
             else:
                 proposals_semantic = None
 
@@ -2357,33 +2530,43 @@ class DAobjTwoStagePseudoLabPanopticFPN(GeneralizedRCNN):
             detected_instances = [x.to(self.device) for x in detected_instances]
             detector_results = self.roi_heads.forward_with_given_boxes(features, detected_instances)
 
-        if self.sem_seg_head is not None:
+        if self.sem_seg_head is not None and self.infer_sem_seg:
             sem_seg_results, _ = self.sem_seg_head(features, None)
 
-        if do_postprocess:
+            if do_postprocess:
+                from copy import deepcopy
+                assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
+                # return GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
+                results = []
+                for sem_seg_result, detector_result, input_per_image, image_size in zip(
+                    sem_seg_results, detector_results, batched_inputs, images.image_sizes
+                ):
+                    height = input_per_image.get("height", image_size[0])
+                    width = input_per_image.get("width", image_size[1])
+                    sem_seg_r = sem_seg_postprocess(sem_seg_result, image_size, height, width)
+                    # temp_detector1 = deepcopy(detector_result)
+                    # temp_detector2 = deepcopy(detector_result)
+                    detector_r = detector_postprocess(detector_result, height, width)
+                    # detector_r = GeneralizedRCNN._postprocess([temp_detector2], [input_per_image], [image_size])[0]['instances']
+
+                    results.append({"sem_seg": sem_seg_r, "instances": detector_r})
+
+                    # panoptic_r = combine_semantic_and_instance_outputs(
+                    #     detector_r,
+                    #     sem_seg_r.argmax(dim=0),
+                    #     self.combine_overlap_thresh,
+                    #     self.combine_stuff_area_thresh,
+                    #     self.combine_instances_score_thresh,
+                    # )
+                    # processed_results[-1]["panoptic_seg"] = panoptic_r
+            else:
+                results = {'instances':detector_results, 'sem_seg':sem_seg_results}
+
+        elif do_postprocess:
             assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
-            # return GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
-            results = []
-            for sem_seg_result, detector_result, input_per_image, image_size in zip(
-                sem_seg_results, detector_results, batched_inputs, images.image_sizes
-            ):
-                height = input_per_image.get("height", image_size[0])
-                width = input_per_image.get("width", image_size[1])
-                sem_seg_r = sem_seg_postprocess(sem_seg_result, image_size, height, width)
-                detector_r = detector_postprocess(detector_result, height, width)
-
-                results.append({"sem_seg": sem_seg_r, "instances": detector_r})
-
-                # panoptic_r = combine_semantic_and_instance_outputs(
-                #     detector_r,
-                #     sem_seg_r.argmax(dim=0),
-                #     self.combine_overlap_thresh,
-                #     self.combine_stuff_area_thresh,
-                #     self.combine_instances_score_thresh,
-                # )
-                # processed_results[-1]["panoptic_seg"] = panoptic_r
+            return GeneralizedRCNN._postprocess(detector_results, batched_inputs, images.image_sizes)
         else:
-            results = {'instances':detector_results, 'sem_seg':sem_seg_results}
+            results = detector_results
         return results
 
 
@@ -2517,3 +2700,184 @@ class DASemSegFPNHead(nn.Module):
         )
         losses = {"loss_sem_seg": loss * self.loss_weight}
         return losses
+    
+def parse_sem():
+    import matplotlib.pyplot as plt
+
+    sem_gt = input_per_image['sem_seg'].numpy()
+    conf, sem_pred = sem_seg_result.softmax(dim=0).max(dim=0)
+    conf = conf.cpu().numpy()[:667,:1333]
+    sem_pred = sem_pred.cpu().numpy()[:667,:1333]
+    ids = np.where(sem_gt==255)
+    sem_gt[ids] = -1
+    sem_pred[ids] = -1
+    map_conf = (conf>=0.95)+1
+    map_corr = (sem_gt==sem_pred)*2-1
+    map_final = map_conf*map_corr
+
+@META_ARCH_REGISTRY.register()
+class DAPLFCOS(FCOS):
+    @configurable
+    def __init__(
+        self,
+        *,
+        backbone: Backbone,
+        head: nn.Module,
+        head_in_features: Optional[List[str]] = None,
+        box2box_transform=None,
+        num_classes,
+        center_sampling_radius: float = 1.5,
+        focal_loss_alpha=0.25,
+        focal_loss_gamma=2.0,
+        test_score_thresh=0.2,
+        test_topk_candidates=1000,
+        test_nms_thresh=0.6,
+        max_detections_per_image=100,
+        pixel_mean,
+        pixel_std,
+    ):
+        """
+        Args:
+            center_sampling_radius: radius of the "center" of a groundtruth box,
+                within which all anchor points are labeled positive.
+            Other arguments mean the same as in :class:`RetinaNet`.
+        """
+        super().__init__(
+            backbone=backbone, 
+            head=head, 
+            head_in_features=head_in_features,
+            box2box_transform=box2box_transform,
+            num_classes=num_classes,
+            center_sampling_radius=center_sampling_radius,
+            focal_loss_alpha=focal_loss_alpha,
+            focal_loss_gamma=focal_loss_gamma,
+            test_score_thresh=test_score_thresh,
+            test_topk_candidates=test_topk_candidates,
+            test_nms_thresh=test_nms_thresh,
+            max_detections_per_image=max_detections_per_image,
+            pixel_mean=pixel_mean,
+            pixel_std=pixel_std,
+            )
+        a=1
+
+    @classmethod
+    def from_config(cls, cfg):
+        backbone = build_backbone(cfg)
+        backbone_shape = backbone.output_shape()
+        feature_shapes = [backbone_shape[f] for f in cfg.MODEL.RETINANET.IN_FEATURES]
+        conv_dims = cfg.MODEL.RETINANET.CONV_DIMS
+        num_classes = cfg.MODEL.RETINANET.NUM_CLASSES
+        norm = cfg.MODEL.FCOS.NORM
+        head = DAFCOSHead(input_shape=feature_shapes, conv_dims=conv_dims, num_classes=num_classes, norm=norm)
+        return {
+            "backbone": backbone,
+            "head": head,
+            "box2box_transform": None,
+            "center_sampling_radius": cfg.MODEL.FCOS.CENTER_SAMPLING_RADIUS,
+            "num_classes": cfg.MODEL.RETINANET.NUM_CLASSES,
+            "head_in_features": cfg.MODEL.RETINANET.IN_FEATURES,
+            # Loss parameters:
+            "focal_loss_alpha": cfg.MODEL.RETINANET.FOCAL_LOSS_ALPHA,
+            "focal_loss_gamma": cfg.MODEL.RETINANET.FOCAL_LOSS_GAMMA,
+            # Inference parameters:
+            "test_score_thresh": cfg.MODEL.RETINANET.SCORE_THRESH_TEST,
+            "test_topk_candidates": cfg.MODEL.RETINANET.TOPK_CANDIDATES_TEST,
+            "test_nms_thresh": cfg.MODEL.RETINANET.NMS_THRESH_TEST,
+            "max_detections_per_image": cfg.TEST.DETECTIONS_PER_IMAGE,
+            "pixel_mean": cfg.MODEL.PIXEL_MEAN,
+            "pixel_std": cfg.MODEL.PIXEL_STD,
+        }
+
+    def forward(
+        self, batched_inputs, branch="supervised"):
+        """
+        Args:
+            batched_inputs: a list, batched outputs of :class:`DatasetMapper` .
+                Each item in the list contains the inputs for one image.
+                For now, each item in the list is a dict that contains:
+
+                * image: Tensor, image in (C, H, W) format.
+                * instances (optional): groundtruth :class:`Instances`
+                * proposals (optional): :class:`Instances`, precomputed proposals.
+
+                Other information that's included in the original dicts, such as:
+
+                * "height", "width" (int): the output resolution of the model, used in inference.
+                  See :meth:`postprocess` for details.
+
+        Returns:
+            list[dict]:
+                Each dict is the output for one input image.
+                The dict contains one key "instances" whose value is a :class:`Instances`.
+                The :class:`Instances` object has the following keys:
+                "pred_boxes", "pred_classes", "scores", "pred_masks", "pred_keypoints"
+        """
+        images = self.preprocess_image(batched_inputs)
+        features = self.backbone(images.tensor)
+        features = [features[f] for f in self.head_in_features]
+        predictions = self.head(features)
+
+        if self.training:
+            assert not torch.jit.is_scripting(), "Not supported"
+            if branch == "supervised" or branch == "supervised_target":
+                assert "instances" in batched_inputs[0], "Instance annotations are missing in training!"
+                gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+                losses = self.forward_training(images, features, predictions, gt_instances)
+                return losses, [], [], None
+            elif branch == "unsup_data_weak":
+                results = self.forward_inference(images, features, predictions)
+
+                # processed_results = []
+                # for results_per_image, input_per_image, image_size in zip(
+                #     results, batched_inputs, images.image_sizes
+                # ):
+                #     height = input_per_image.get("height", image_size[0])
+                #     width = input_per_image.get("width", image_size[1])
+                #     r = detector_postprocess(results_per_image, height, width)
+                #     processed_results.append({"instances": r})
+
+                return {}, results, results, None, None
+            elif branch == "domain":
+                return {}, [], [], None
+        else:
+            results = self.forward_inference(images, features, predictions)
+            if torch.jit.is_scripting():
+                return results
+
+            processed_results = []
+            for results_per_image, input_per_image, image_size in zip(
+                results, batched_inputs, images.image_sizes
+            ):
+                height = input_per_image.get("height", image_size[0])
+                width = input_per_image.get("width", image_size[1])
+                r = detector_postprocess(results_per_image, height, width)
+                processed_results.append({"instances": r})
+            return processed_results
+
+from detectron2.modeling.meta_arch.retinanet import RetinaNetHead
+class DAFCOSHead(RetinaNetHead):
+    """
+    The head used in :paper:`fcos`. It adds an additional centerness
+    prediction branch on top of :class:`RetinaNetHead`.
+    """
+
+    def __init__(self, *, input_shape: List[ShapeSpec], conv_dims: List[int], **kwargs):
+        super().__init__(input_shape=input_shape, conv_dims=conv_dims, num_anchors=1, **kwargs)
+        # Unlike original FCOS, we do not add an additional learnable scale layer
+        # because it's found to have no benefits after normalizing regression targets by stride.
+        self._num_features = len(input_shape)
+        self.ctrness = nn.Conv2d(conv_dims[-1], 1, kernel_size=3, stride=1, padding=1)
+        torch.nn.init.normal_(self.ctrness.weight, std=0.01)
+        torch.nn.init.constant_(self.ctrness.bias, 0)
+
+    def forward(self, features):
+        assert len(features) == self._num_features
+        logits = []
+        bbox_reg = []
+        ctrness = []
+        for feature in features:
+            logits.append(self.cls_score(self.cls_subnet(feature)))
+            bbox_feature = self.bbox_subnet(feature)
+            bbox_reg.append(self.bbox_pred(bbox_feature))
+            ctrness.append(self.ctrness(bbox_feature))
+        return logits, bbox_reg, ctrness
